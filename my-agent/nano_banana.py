@@ -2,13 +2,13 @@ import asyncio
 import base64
 import io
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
 
-from google import genai
-from google.genai import types
 from PIL import Image
 
 
@@ -102,8 +102,10 @@ class NanoBananaProcessor:
         payload = {
             "event": "mirror_update",
             "job_id": result.get("job_id"),
+            "item_id": result.get("item_id"),
             "status": result.get("status", "unknown"),
             "image_url": result.get("image_url"),
+            "source_image_url": self.merchandise_image,
             "latency_ms": result.get("latency_ms"),
             "reason": result.get("reason"),
             "message": result.get("message"),
@@ -130,11 +132,66 @@ class NanoBananaProcessor:
         except Exception:
             return data.encode("utf-8")
 
+    @staticmethod
+    def _looks_like_image_bytes(data: bytes) -> bool:
+        if not data:
+            return False
+        signatures = (
+            b"\x89PNG\r\n\x1a\n",
+            b"\xff\xd8\xff",
+            b"GIF87a",
+            b"GIF89a",
+            b"RIFF",
+            b"BM",
+        )
+        if any(data.startswith(sig) for sig in signatures):
+            return True
+        if data[:12].startswith(b"RIFF") and b"WEBP" in data[:16]:
+            return True
+        return False
+
     def _read_image_bytes_from_path_or_url(self, source: str) -> bytes:
+        source = source.strip()
+
+        if source.startswith("data:image/"):
+            header, encoded = source.split(",", 1)
+            if ";base64" in header:
+                raw = base64.b64decode(encoded, validate=False)
+            else:
+                raw = urllib.parse.unquote_to_bytes(encoded)
+            if not self._looks_like_image_bytes(raw):
+                raise ValueError("Data URL did not contain a valid image payload.")
+            return raw
+
         if self._is_url(source):
-            with urllib.request.urlopen(source, timeout=20) as response:
-                return response.read()
-        return Path(source).read_bytes()
+            request = urllib.request.Request(
+                source,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 TryOnAI/1.0"
+                    )
+                },
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    content_type = (response.headers.get("Content-Type") or "").lower()
+                    data = response.read()
+
+                if content_type and "image/" not in content_type:
+                    raise ValueError(
+                        f"Remote URL did not return image content (content-type={content_type})."
+                    )
+                if not self._looks_like_image_bytes(data):
+                    raise ValueError("Remote URL payload is not a valid image.")
+                return data
+            except urllib.error.URLError as exc:
+                raise ValueError(f"Failed to download remote image: {exc}") from exc
+
+        data = Path(source).read_bytes()
+        if not self._looks_like_image_bytes(data):
+            raise ValueError("Local file is not a valid image.")
+        return data
 
     def _image_bytes_from_frame(self, frame: Any) -> bytes:
         if isinstance(frame, (bytes, bytearray, memoryview)):
@@ -192,7 +249,7 @@ class NanoBananaProcessor:
             return {
                 "status": "error",
                 "reason": "missing_api_key",
-                "message": "GOOGLE_API_KEY is not set.",
+                "message": "NANO_BANANA_API_KEY is not set.",
             }
 
         try:
@@ -217,6 +274,16 @@ class NanoBananaProcessor:
                 "it matches the garment from image 2 with realistic fit and texture. Do not alter identity or scene. "
                 "Return one photorealistic edited image."
             )
+
+            try:
+                from google import genai
+                from google.genai import types
+            except Exception as exc:
+                return {
+                    "status": "error",
+                    "reason": "missing_google_genai_dependency",
+                    "message": f"google-genai dependency is not available: {exc}",
+                }
 
             client = genai.Client(api_key=self.api_key)
             response = await asyncio.to_thread(

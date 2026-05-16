@@ -36,11 +36,17 @@ const CLOSET_ITEMS = [
     imageUrl: 'https://images.unsplash.com/photo-1527719327859-c6ce80353573',
   },
 ];
+
 const RECOMMENDATIONS = [
   { id: 'r1', name: 'Cargo Joggers', category: 'Match - 98%', price: '$55.00', emoji: '👖' },
   { id: 'r2', name: 'Techwear Boots', category: 'Match - 92%', price: '$120.00', emoji: '🥾' },
   { id: 'r3', name: 'Silver Chain Set', category: 'Match - 85%', price: '$19.00', emoji: '⛓️' },
 ];
+
+const isLikelyImageUrl = (value) =>
+  typeof value === 'string' &&
+  /^https?:\/\//i.test(value) &&
+  !/\.html?($|\?)/i.test(value);
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('closet');
@@ -78,7 +84,7 @@ export default function App() {
       videoRef.current.srcObject = null;
     }
 
-    setIsMirrorActive(false);
+    setIsCameraActive(false);
   }, []);
 
   const startCamera = useCallback(async () => {
@@ -103,7 +109,7 @@ export default function App() {
         videoRef.current.srcObject = stream;
       }
 
-      setIsMirrorActive(true);
+      setIsCameraActive(true);
     } catch (err) {
       console.error('Error accessing camera:', err);
       alert('Could not access camera. Please check your permissions.');
@@ -111,27 +117,85 @@ export default function App() {
     }
   }, [stopCamera]);
 
-  const handleMirrorToggle = useCallback(async () => {
-    if (isMirrorActive) {
+  const toggleCamera = useCallback(async () => {
+    if (isCameraActive) {
       stopCamera();
       return;
     }
-
     await startCamera();
   }, [isCameraActive, startCamera, stopCamera]);
 
   useEffect(() => {
-    if (isMirrorActive && videoRef.current && streamRef.current) {
-      videoRef.current.srcObject = streamRef.current;
-    }
-  }, [isMirrorActive]);
+    sendAgentEvent('camera_state', { is_camera_active: isCameraActive });
+  }, [isCameraActive, sendAgentEvent]);
 
-  useEffect(() => () => {
-    stopCamera();
+  useEffect(() => {
+    const mirrorUpdateHandler = (event) => {
+      const detail = event?.detail || {};
+      const payload = detail?.payload || detail || {};
+      const imageUrl = payload?.image_url;
+      if (typeof imageUrl === 'string' && imageUrl.trim()) {
+        setProcessedImageUrl(imageUrl);
+        setSyncStatus('UPDATED');
+      }
+    };
+
+    const streamCustomHandler = (event) => {
+      const eventType = event?.type || event?.custom?.type;
+      const payload = event?.payload || event?.custom?.payload || {};
+      if (eventType === 'mirror_update') {
+        mirrorUpdateHandler({ detail: payload });
+      }
+    };
+
+    window.addEventListener('mirror_update', mirrorUpdateHandler);
+
+    const streamCall = window.streamCall;
+    let unsubscribeStream = null;
+    if (streamCall && typeof streamCall.on === 'function') {
+      try {
+        const maybeUnsubscribe = streamCall.on('custom', streamCustomHandler);
+        if (typeof maybeUnsubscribe === 'function') {
+          unsubscribeStream = maybeUnsubscribe;
+        }
+        setSyncStatus('STREAM_LISTENING');
+      } catch {
+        setSyncStatus('LOCAL_BRIDGE');
+      }
+    }
+
+    return () => {
+      window.removeEventListener('mirror_update', mirrorUpdateHandler);
+      if (typeof unsubscribeStream === 'function') {
+        unsubscribeStream();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const previousBodyOverflowX = document.body.style.overflowX;
+    const previousBodyMargin = document.body.style.margin;
+    const previousHtmlOverflowX = document.documentElement.style.overflowX;
+
+    document.body.style.overflowX = 'hidden';
+    document.body.style.margin = '0';
+    document.documentElement.style.overflowX = 'hidden';
+
+    return () => {
+      stopCamera();
+      document.body.style.overflowX = previousBodyOverflowX;
+      document.body.style.margin = previousBodyMargin;
+      document.documentElement.style.overflowX = previousHtmlOverflowX;
+    };
   }, [stopCamera]);
 
   const handleCalibrate = useCallback(() => {
     if (!selectedItem) return;
+    if (!isLikelyImageUrl(selectedItem.imageUrl)) {
+      alert('Selected item does not have a valid direct image URL.');
+      return;
+    }
+
     sendAgentEvent('set_merchandise', {
       item_id: selectedItem.id,
       image_url: selectedItem.imageUrl,
@@ -140,11 +204,7 @@ export default function App() {
   }, [selectedItem, sendAgentEvent]);
 
   return (
-    <div
-      className="app-container"
-      style={{ width: '100%', minHeight: '100vh', overflowX: 'hidden', overflowY: 'auto' }}
-    >
-      {/* Left Pane: The Smart Mirror Interface */}
+    <div className="app-container">
       <main className="mirror-section">
         <header className="mirror-header">
           <h1>TRY ON AI</h1>
@@ -153,15 +213,9 @@ export default function App() {
 
         <div className="mirror-view-wrapper">
           {isCameraActive ? (
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
-              className="camera-feed"
-              style={{ width: '100%', height: '100%', flex: '1 1 auto', objectFit: 'cover' }}
-            />
+            <video ref={videoRef} autoPlay playsInline className="camera-feed" />
           ) : (
-            <div className="camera-placeholder" style={{ width: '100%', height: '100%', flex: '1 1 auto' }}>
+            <div className="camera-placeholder">
               <span style={{ fontSize: '3rem' }}>🪞</span>
               <p>Mirror display is offline</p>
             </div>
@@ -176,22 +230,21 @@ export default function App() {
             />
           ) : null}
 
-          {/* Smart Mirror HUD Overlay */}
           <div className="mirror-overlay">
             <div className="overlay-badge">
               <div className="badge-pulse"></div>
-              <span>{isCameraActive ? 'SYSTEM ACTIVE' : 'STANDBY'}</span>
+              <span>{isCameraActive ? 'SYSTEM ACTIVE' : 'STANDBY'} · {syncStatus}</span>
             </div>
 
-            {isMirrorActive && <div className="scan-line"></div>}
+            {isCameraActive && <div className="scan-line"></div>}
 
             <div className="mirror-controls">
               <button className="btn" onClick={toggleCamera}>
                 {isCameraActive ? 'Power Down Mirror' : 'Initialize Mirror'}
               </button>
-              <button 
+              <button
                 className={`btn btn-primary ${!selectedItem ? 'disabled' : ''}`}
-                onClick={() => alert(`Analyzing fitment data for: ${selectedItem?.name}`)}
+                onClick={handleCalibrate}
                 disabled={!selectedItem}
               >
                 Calibrate Fitment
@@ -201,7 +254,6 @@ export default function App() {
         </div>
       </main>
 
-      {/* Right Pane: Catalog and Recommendation Engine */}
       <aside className="sidebar">
         <nav className="tabs">
           <button
@@ -222,45 +274,41 @@ export default function App() {
           {activeTab === 'closet' ? (
             <>
               <h2>Select a garment to overlay</h2>
-              <div className="item-grid-container">
-                <div className="item-grid">
-                  {CLOSET_ITEMS.map((item) => (
-                    <button
-                      key={item.id}
-                      className={`item-card ${selectedItem?.id === item.id ? 'selected' : ''}`}
-                      onClick={() => setSelectedItem(item)}
-                    >
-                      <div className="item-image-placeholder">{item.emoji}</div>
-                      <div className="item-info">
-                        <h3>{item.name}</h3>
-                        <p>{item.category}</p>
-                      </div>
-                      <div className="item-price">{item.price}</div>
-                    </button>
-                  ))}
-                </div>
+              <div className="item-grid">
+                {CLOSET_ITEMS.map((item) => (
+                  <button
+                    key={item.id}
+                    className={`item-card ${selectedItem?.id === item.id ? 'selected' : ''}`}
+                    onClick={() => setSelectedItem(item)}
+                  >
+                    <div className="item-image-placeholder">{item.emoji}</div>
+                    <div className="item-info">
+                      <h3>{item.name}</h3>
+                      <p>{item.category}</p>
+                    </div>
+                    <div className="item-price">{item.price}</div>
+                  </button>
+                ))}
               </div>
             </>
           ) : (
             <>
               <h2>Recommended Complements</h2>
-              <div className="item-grid-container">
-                <div className="item-grid">
-                  {RECOMMENDATIONS.map((item) => (
-                    <button
-                      key={item.id}
-                      className="item-card"
-                      onClick={() => alert(`Redirecting to online merchant catalogue for ${item.name}`)}
-                    >
-                      <div className="item-image-placeholder">{item.emoji}</div>
-                      <div className="item-info">
-                        <h3>{item.name}</h3>
-                        <p style={{ color: '#10b981', fontWeight: '600' }}>{item.category}</p>
-                      </div>
-                      <div className="item-price">{item.price}</div>
-                    </button>
-                  ))}
-                </div>
+              <div className="item-grid">
+                {RECOMMENDATIONS.map((item) => (
+                  <button
+                    key={item.id}
+                    className="item-card"
+                    onClick={() => alert(`Redirecting to online merchant catalogue for ${item.name}`)}
+                  >
+                    <div className="item-image-placeholder">{item.emoji}</div>
+                    <div className="item-info">
+                      <h3>{item.name}</h3>
+                      <p style={{ color: '#10b981', fontWeight: '600' }}>{item.category}</p>
+                    </div>
+                    <div className="item-price">{item.price}</div>
+                  </button>
+                ))}
               </div>
             </>
           )}
