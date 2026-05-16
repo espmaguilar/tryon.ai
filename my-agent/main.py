@@ -1,7 +1,7 @@
 from pathlib import Path
 from dotenv import load_dotenv
 from vision_agents.core import Agent, AgentLauncher, User, Runner
-from vision_agents.plugins import getstream, gemini
+from vision_agents.plugins import getstream, gemini, decart
 
 base_dir = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=base_dir / ".env", override=False)
@@ -11,7 +11,7 @@ async def create_agent(**kwargs) -> Agent:
     return Agent(
         edge=getstream.Edge(),
         agent_user=User(name="Assistant", id="agent"),
-        instructions="You're a helpful voice assistant. Be concise.",
+        instructions="Describe what clothes the person in the video is wearing. Be concise.",
         llm=gemini.Realtime(),
     )
 
