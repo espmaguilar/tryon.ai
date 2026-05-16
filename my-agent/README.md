@@ -13,7 +13,7 @@ A minimal Vision Agents voice assistant project configured for Python 3.12.
    ```text
    STREAM_API_KEY=
    STREAM_API_SECRET=
-   GOOGLE_API_KEY=
+   SERPER_API_KEY=
    ```
 
 3. Run the assistant:
@@ -24,4 +24,4 @@ A minimal Vision Agents voice assistant project configured for Python 3.12.
 ## Notes
 
 - This project is based on Vision Agents documentation at https://visionagents.ai
-- Use your Stream credentials from getstream.io and Google API key from aistudio.google.com.
+- Use your Stream credentials from getstream.io and your Serper API key from serper.dev.
