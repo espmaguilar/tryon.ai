@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 
 // Mock Data for Clothes Catalog
@@ -78,7 +78,7 @@ export default function App() {
       videoRef.current.srcObject = null;
     }
 
-    setIsCameraActive(false);
+    setIsMirrorActive(false);
   }, []);
 
   const startCamera = useCallback(async () => {
@@ -103,7 +103,7 @@ export default function App() {
         videoRef.current.srcObject = stream;
       }
 
-      setIsCameraActive(true);
+      setIsMirrorActive(true);
     } catch (err) {
       console.error('Error accessing camera:', err);
       alert('Could not access camera. Please check your permissions.');
@@ -111,9 +111,8 @@ export default function App() {
     }
   }, [stopCamera]);
 
-  // Handle turning webcam on/off
-  const toggleCamera = useCallback(async () => {
-    if (isCameraActive) {
+  const handleMirrorToggle = useCallback(async () => {
+    if (isMirrorActive) {
       stopCamera();
       return;
     }
@@ -122,67 +121,13 @@ export default function App() {
   }, [isCameraActive, startCamera, stopCamera]);
 
   useEffect(() => {
-    sendAgentEvent('camera_state', { is_camera_active: isCameraActive });
-  }, [isCameraActive, sendAgentEvent]);
-
-  useEffect(() => {
-    const mirrorUpdateHandler = (event) => {
-      const detail = event?.detail || {};
-      const payload = detail?.payload || detail || {};
-      const imageUrl = payload?.image_url;
-      if (typeof imageUrl === 'string' && imageUrl.trim()) {
-        setProcessedImageUrl(imageUrl);
-        setSyncStatus('UPDATED');
-      }
-    };
-
-    const streamCustomHandler = (event) => {
-      const eventType = event?.type || event?.custom?.type;
-      const payload = event?.payload || event?.custom?.payload || {};
-      if (eventType === 'mirror_update') {
-        mirrorUpdateHandler({ detail: payload });
-      }
-    };
-
-    window.addEventListener('mirror_update', mirrorUpdateHandler);
-
-    const streamCall = window.streamCall;
-    let unsubscribeStream = null;
-    if (streamCall && typeof streamCall.on === 'function') {
-      try {
-        const maybeUnsubscribe = streamCall.on('custom', streamCustomHandler);
-        if (typeof maybeUnsubscribe === 'function') {
-          unsubscribeStream = maybeUnsubscribe;
-        }
-        setSyncStatus('STREAM_LISTENING');
-      } catch {
-        setSyncStatus('LOCAL_BRIDGE');
-      }
+    if (isMirrorActive && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
     }
+  }, [isMirrorActive]);
 
-    return () => {
-      window.removeEventListener('mirror_update', mirrorUpdateHandler);
-      if (typeof unsubscribeStream === 'function') {
-        unsubscribeStream();
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    const previousBodyOverflowX = document.body.style.overflowX;
-    const previousBodyMargin = document.body.style.margin;
-    const previousHtmlOverflowX = document.documentElement.style.overflowX;
-
-    document.body.style.overflowX = 'hidden';
-    document.body.style.margin = '0';
-    document.documentElement.style.overflowX = 'hidden';
-
-    return () => {
-      stopCamera();
-      document.body.style.overflowX = previousBodyOverflowX;
-      document.body.style.margin = previousBodyMargin;
-      document.documentElement.style.overflowX = previousHtmlOverflowX;
-    };
+  useEffect(() => () => {
+    stopCamera();
   }, [stopCamera]);
 
   const handleCalibrate = useCallback(() => {
@@ -195,7 +140,10 @@ export default function App() {
   }, [selectedItem, sendAgentEvent]);
 
   return (
-    <div className="app-container">
+    <div
+      className="app-container"
+      style={{ width: '100%', minHeight: '100vh', overflowX: 'hidden', overflowY: 'auto' }}
+    >
       {/* Left Pane: The Smart Mirror Interface */}
       <main className="mirror-section">
         <header className="mirror-header">
@@ -205,14 +153,15 @@ export default function App() {
 
         <div className="mirror-view-wrapper">
           {isCameraActive ? (
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
+            <video 
+              ref={videoRef} 
+              autoPlay 
+              playsInline 
               className="camera-feed"
+              style={{ width: '100%', height: '100%', flex: '1 1 auto', objectFit: 'cover' }}
             />
           ) : (
-            <div className="camera-placeholder">
+            <div className="camera-placeholder" style={{ width: '100%', height: '100%', flex: '1 1 auto' }}>
               <span style={{ fontSize: '3rem' }}>🪞</span>
               <p>Mirror display is offline</p>
             </div>
@@ -231,18 +180,18 @@ export default function App() {
           <div className="mirror-overlay">
             <div className="overlay-badge">
               <div className="badge-pulse"></div>
-              <span>{isCameraActive ? 'SYSTEM ACTIVE' : 'STANDBY'} · {syncStatus}</span>
+              <span>{isCameraActive ? 'SYSTEM ACTIVE' : 'STANDBY'}</span>
             </div>
 
-            {isCameraActive && <div className="scan-line"></div>}
+            {isMirrorActive && <div className="scan-line"></div>}
 
             <div className="mirror-controls">
               <button className="btn" onClick={toggleCamera}>
                 {isCameraActive ? 'Power Down Mirror' : 'Initialize Mirror'}
               </button>
-              <button
+              <button 
                 className={`btn btn-primary ${!selectedItem ? 'disabled' : ''}`}
-                onClick={handleCalibrate}
+                onClick={() => alert(`Analyzing fitment data for: ${selectedItem?.name}`)}
                 disabled={!selectedItem}
               >
                 Calibrate Fitment
@@ -273,41 +222,45 @@ export default function App() {
           {activeTab === 'closet' ? (
             <>
               <h2>Select a garment to overlay</h2>
-              <div className="item-grid">
-                {CLOSET_ITEMS.map((item) => (
-                  <button
-                    key={item.id}
-                    className={`item-card ${selectedItem?.id === item.id ? 'selected' : ''}`}
-                    onClick={() => setSelectedItem(item)}
-                  >
-                    <div className="item-image-placeholder">{item.emoji}</div>
-                    <div className="item-info">
-                      <h3>{item.name}</h3>
-                      <p>{item.category}</p>
-                    </div>
-                    <div className="item-price">{item.price}</div>
-                  </button>
-                ))}
+              <div className="item-grid-container">
+                <div className="item-grid">
+                  {CLOSET_ITEMS.map((item) => (
+                    <button
+                      key={item.id}
+                      className={`item-card ${selectedItem?.id === item.id ? 'selected' : ''}`}
+                      onClick={() => setSelectedItem(item)}
+                    >
+                      <div className="item-image-placeholder">{item.emoji}</div>
+                      <div className="item-info">
+                        <h3>{item.name}</h3>
+                        <p>{item.category}</p>
+                      </div>
+                      <div className="item-price">{item.price}</div>
+                    </button>
+                  ))}
+                </div>
               </div>
             </>
           ) : (
             <>
               <h2>Recommended Complements</h2>
-              <div className="item-grid">
-                {RECOMMENDATIONS.map((item) => (
-                  <button
-                    key={item.id}
-                    className="item-card"
-                    onClick={() => alert(`Redirecting to online merchant catalogue for ${item.name}`)}
-                  >
-                    <div className="item-image-placeholder">{item.emoji}</div>
-                    <div className="item-info">
-                      <h3>{item.name}</h3>
-                      <p style={{ color: '#10b981', fontWeight: '600' }}>{item.category}</p>
-                    </div>
-                    <div className="item-price">{item.price}</div>
-                  </button>
-                ))}
+              <div className="item-grid-container">
+                <div className="item-grid">
+                  {RECOMMENDATIONS.map((item) => (
+                    <button
+                      key={item.id}
+                      className="item-card"
+                      onClick={() => alert(`Redirecting to online merchant catalogue for ${item.name}`)}
+                    >
+                      <div className="item-image-placeholder">{item.emoji}</div>
+                      <div className="item-info">
+                        <h3>{item.name}</h3>
+                        <p style={{ color: '#10b981', fontWeight: '600' }}>{item.category}</p>
+                      </div>
+                      <div className="item-price">{item.price}</div>
+                    </button>
+                  ))}
+                </div>
               </div>
             </>
           )}
