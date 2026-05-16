@@ -1,0 +1,13 @@
+[project]
+name = "voice-agent"
+version = "0.1.0"
+description = "Voice-to-prompt transcription agent using GetStream and Gemini"
+requires-python = ">=3.12,<4.0"
+dependencies = [
+    "vision-agents[gemini,getstream]",
+    "getstream",
+    "python-dotenv",
+]
+
+[project.urls]
+"Homepage" = "https://visionagents.ai"
