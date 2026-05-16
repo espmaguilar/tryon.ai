@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\espyc\\\\OneDrive\\\\Documents\\\\GitHub\\\\tryon.ai\" -Force)",
+      "Bash(Select-Object Name, PSIsContainer)"
+    ]
+  }
+}
