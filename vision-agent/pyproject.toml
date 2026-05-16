@@ -1,0 +1,14 @@
+[project]
+name = "vision-agent"
+version = "0.1.0"
+description = "Vision Agents demo: video AI agent (uv + Python 3.12)"
+readme = "README.md"
+requires-python = ">=3.12,<4"
+
+dependencies = [
+  "vision-agents[getstream,gemini,ultralytics,decart]",
+  "python-dotenv",
+]
+
+[tool.uv]
+# Project configured for use with the `uv` CLI. Initialize with `uv init` if needed.

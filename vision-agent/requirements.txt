@@ -1,0 +1,2 @@
+vision-agents[getstream,gemini,ultralytics,decart]
+python-dotenv
