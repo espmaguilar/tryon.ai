@@ -1,122 +1,158 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import React, { useState, useRef } from 'react';
+import './App.css';
 
-function App() {
-  const [count, setCount] = useState(0)
+// Mock Data for Clothes Catalog
+const CLOSET_ITEMS = [
+  { id: 't1', name: 'Cyberpunk Bomber', category: 'Outerwear', price: '$89.00', emoji: '🧥' },
+  { id: 't2', name: 'Classic Denim Jacket', category: 'Outerwear', price: '$65.00', emoji: '🧥' },
+  { id: 't3', name: 'Oversized Linen Shirt', category: 'Tops', price: '$45.00', emoji: '👕' },
+  { id: 't4', name: 'Minimalist Black Tee', category: 'Tops', price: '$28.00', emoji: '👕' },
+];
+
+const RECOMMENDATIONS = [
+  { id: 'r1', name: 'Cargo Joggers', category: 'Match - 98%', price: '$55.00', emoji: '👖' },
+  { id: 'r2', name: 'Techwear Boots', category: 'Match - 92%', price: '$120.00', emoji: '🥾' },
+  { id: 'r3', name: 'Silver Chain Set', category: 'Match - 85%', price: '$19.00', emoji: '⛓️' },
+];
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('closet');
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const videoRef = useRef(null);
+
+  // Handle turning webcam on/off
+  const toggleCamera = async () => {
+    if (isCameraActive) {
+      const stream = videoRef.current?.srcObject;
+      const tracks = stream?.getTracks();
+      tracks?.forEach(track => track.stop());
+      if (videoRef.current) videoRef.current.srcObject = null;
+      setIsCameraActive(false);
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        setIsCameraActive(true);
+      } catch (err) {
+        console.error("Error accessing camera: ", err);
+        alert("Could not access camera. Please check your permissions.");
+      }
+    }
+  };
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div className="app-container">
+      {/* Left Pane: The Smart Mirror Interface */}
+      <main className="mirror-section">
+        <header className="mirror-header">
+          <h1>TRY ON AI</h1>
+          <p>Interactive Smart Mirror System v1.0</p>
+        </header>
 
-      <div className="ticks"></div>
+        <div className="mirror-view-wrapper">
+          {isCameraActive ? (
+            <video 
+              ref={videoRef} 
+              autoPlay 
+              playsInline 
+              className="camera-feed"
+            />
+          ) : (
+            <div className="camera-placeholder">
+              <span style={{ fontSize: '3rem' }}>🪞</span>
+              <p>Mirror display is offline</p>
+            </div>
+          )}
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+          {/* Smart Mirror HUD Overlay */}
+          <div className="mirror-overlay">
+            <div className="overlay-badge">
+              <div className="badge-pulse"></div>
+              <span>{isCameraActive ? 'SYSTEM ACTIVE' : 'STANDBY'}</span>
+            </div>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+            {isCameraActive && <div className="scan-line"></div>}
+
+            <div className="mirror-controls">
+              <button className="btn" onClick={toggleCamera}>
+                {isCameraActive ? 'Power Down Mirror' : 'Initialize Mirror'}
+              </button>
+              <button 
+                className={`btn btn-primary ${!selectedItem ? 'disabled' : ''}`}
+                onClick={() => alert(`Analyzing fitment data for: ${selectedItem?.name}`)}
+                disabled={!selectedItem}
+              >
+                Calibrate Fitment
+              </button>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Right Pane: Catalog and Recommendation Engine */}
+      <aside className="sidebar">
+        <nav className="tabs">
+          <button 
+            className={`tab-btn ${activeTab === 'closet' ? 'active' : ''}`}
+            onClick={() => setActiveTab('closet')}
+          >
+            My Closet
+          </button>
+          <button 
+            className={`tab-btn ${activeTab === 'ai' ? 'active' : ''}`}
+            onClick={() => setActiveTab('ai')}
+          >
+            AI Suggestions
+          </button>
+        </nav>
+
+        <section className="panel-content">
+          {activeTab === 'closet' ? (
+            <>
+              <h2>Select a garment to overlay</h2>
+              <div className="item-grid">
+                {CLOSET_ITEMS.map((item) => (
+                  <button
+                    key={item.id}
+                    className={`item-card ${selectedItem?.id === item.id ? 'selected' : ''}`}
+                    onClick={() => setSelectedItem(item)}
+                  >
+                    <div className="item-image-placeholder">{item.emoji}</div>
+                    <div className="item-info">
+                      <h3>{item.name}</h3>
+                      <p>{item.category}</p>
+                    </div>
+                    <div className="item-price">{item.price}</div>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <h2>Recommended Complements</h2>
+              <div className="item-grid">
+                {RECOMMENDATIONS.map((item) => (
+                  <button
+                    key={item.id}
+                    className="item-card"
+                    onClick={() => alert(`Redirecting to online merchant catalogue for ${item.name}`)}
+                  >
+                    <div className="item-image-placeholder">{item.emoji}</div>
+                    <div className="item-info">
+                      <h3>{item.name}</h3>
+                      <p style={{ color: '#10b981', fontWeight: '600' }}>{item.category}</p>
+                    </div>
+                    <div className="item-price">{item.price}</div>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+      </aside>
+    </div>
+  );
 }
-
-export default App
