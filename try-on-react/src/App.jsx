@@ -1,7 +1,6 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import './App.css';
 
-// Mock Data for Clothes Catalog
 const CLOSET_ITEMS = [
   { id: 't1', name: 'Cyberpunk Bomber', category: 'Outerwear', price: '$89.00', emoji: '🧥' },
   { id: 't2', name: 'Classic Denim Jacket', category: 'Outerwear', price: '$65.00', emoji: '🧥' },
@@ -18,34 +17,34 @@ const RECOMMENDATIONS = [
 export default function App() {
   const [activeTab, setActiveTab] = useState('closet');
   const [selectedItem, setSelectedItem] = useState(null);
-  const [isCameraActive, setIsCameraActive] = useState(false);
-  const videoRef = useRef(null);
+  const [isMirrorOnline, setIsMirrorOnline] = useState(false);
+  const [isCalibrating, setIsCalibrating] = useState(false);
 
-  // Handle turning webcam on/off
-  const toggleCamera = async () => {
-    if (isCameraActive) {
-      const stream = videoRef.current?.srcObject;
-      const tracks = stream?.getTracks();
-      tracks?.forEach(track => track.stop());
-      if (videoRef.current) videoRef.current.srcObject = null;
-      setIsCameraActive(false);
+  // Simulates an AI scanning framework initializing
+  const handleMirrorToggle = () => {
+    if (isMirrorOnline) {
+      setIsMirrorOnline(false);
+      setIsCalibrating(false);
     } else {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-        setIsCameraActive(true);
-      } catch (err) {
-        console.error("Error accessing camera: ", err);
-        alert("Could not access camera. Please check your permissions.");
-      }
+      setIsCalibrating(true);
     }
   };
 
+  // Simulates a 2-second calibration lag typical of vision processing
+  useEffect(() => {
+    let timer;
+    if (isCalibrating) {
+      timer = setTimeout(() => {
+        setIsCalibrating(false);
+        setIsMirrorOnline(true);
+      }, 2000);
+    }
+    return () => clearTimeout(timer);
+  }, [isCalibrating]);
+
   return (
     <div className="app-container">
-      {/* Left Pane: The Smart Mirror Interface */}
+      {/* Left Pane: The Smart Mirror Viewport */}
       <main className="mirror-section">
         <header className="mirror-header">
           <h1>TRY ON AI</h1>
@@ -53,13 +52,23 @@ export default function App() {
         </header>
 
         <div className="mirror-view-wrapper">
-          {isCameraActive ? (
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
-              className="camera-feed"
-            />
+          {isCalibrating ? (
+            <div className="camera-placeholder">
+              <div className="badge-pulse" style={{ width: '24px', height: '24px', marginBottom: '16px' }}></div>
+              <p style={{ color: '#38bdf8', letterSpacing: '0.1em' }}>INITIALIZING AI ENGINE...</p>
+            </div>
+          ) : isMirrorOnline ? (
+            /* GetStream integration will replace this block later */
+            <div className="camera-placeholder" style={{ background: 'linear-gradient(to bottom, #1e1b4b, #030712)' }}>
+              <span style={{ fontSize: '4rem', marginBottom: '8px' }}>👤</span>
+              <p style={{ color: '#a5b4fc' }}>Live Video Stream Matrix</p>
+              <p style={{ color: '#64748b', fontSize: '0.8rem' }}>[ GetStream Video Pipeline Component Holder ]</p>
+              {selectedItem && (
+                <div style={{ fontSize: '5rem', marginTop: '20px', animation: 'pulse 2s infinite' }}>
+                  {selectedItem.emoji}
+                </div>
+              )}
+            </div>
           ) : (
             <div className="camera-placeholder">
               <span style={{ fontSize: '3rem' }}>🪞</span>
@@ -70,20 +79,20 @@ export default function App() {
           {/* Smart Mirror HUD Overlay */}
           <div className="mirror-overlay">
             <div className="overlay-badge">
-              <div className="badge-pulse"></div>
-              <span>{isCameraActive ? 'SYSTEM ACTIVE' : 'STANDBY'}</span>
+              <div className="badge-pulse" style={{ backgroundColor: isMirrorOnline ? '#10b981' : isCalibrating ? '#f59e0b' : '#ef4444' }}></div>
+              <span>{isMirrorOnline ? 'SYSTEM ACTIVE' : isCalibrating ? 'CALIBRATING' : 'STANDBY'}</span>
             </div>
 
-            {isCameraActive && <div className="scan-line"></div>}
+            {isMirrorOnline && <div className="scan-line"></div>}
 
             <div className="mirror-controls">
-              <button className="btn" onClick={toggleCamera}>
-                {isCameraActive ? 'Power Down Mirror' : 'Initialize Mirror'}
+              <button className="btn" onClick={handleMirrorToggle} disabled={isCalibrating}>
+                {isMirrorOnline ? 'Power Down Mirror' : 'Initialize Mirror'}
               </button>
               <button 
-                className={`btn btn-primary ${!selectedItem ? 'disabled' : ''}`}
-                onClick={() => alert(`Analyzing fitment data for: ${selectedItem?.name}`)}
-                disabled={!selectedItem}
+                className="btn btn-primary"
+                onClick={() => alert(`Calibrating target framework coordinates for: ${selectedItem?.name}`)}
+                disabled={!selectedItem || !isMirrorOnline}
               >
                 Calibrate Fitment
               </button>
@@ -138,7 +147,7 @@ export default function App() {
                   <button
                     key={item.id}
                     className="item-card"
-                    onClick={() => alert(`Redirecting to online merchant catalogue for ${item.name}`)}
+                    onClick={() => alert(`Redirecting to catalogue for ${item.name}`)}
                   >
                     <div className="item-image-placeholder">{item.emoji}</div>
                     <div className="item-info">
