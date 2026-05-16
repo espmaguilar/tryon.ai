@@ -9,9 +9,11 @@ from urllib.parse import urlparse
 
 
 SERPER_API_URL = "https://google.serper.dev/search"
+SERPER_SHOPPING_API_URL = "https://google.serper.dev/shopping"
 DEFAULT_LIMIT = 10
 DEFAULT_RESULT_COUNT = 20
 MAX_STYLE_LENGTH = 200
+MAX_BACKPLAN_ATTEMPTS = 8
 BLOCKED_DOMAINS = {
     "pinterest.com",
     "instagram.com",
@@ -21,11 +23,30 @@ BLOCKED_DOMAINS = {
     "twitter.com",
     "youtube.com",
 }
+NON_STORE_DOMAINS = {
+    "reddit.com",
+    "quora.com",
+    "wikipedia.org",
+    "medium.com",
+    "blogspot.com",
+    "wordpress.com",
+    "tumblr.com",
+}
+BACKPLAN_QUERY_SUFFIXES = (
+    "clothing product page buy",
+    "fashion product buy online",
+    "store product detail page",
+    "buy now add to cart",
+)
+
+# Marker variables to be filled later.
+PROMPT = ""
+URL = ""
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Find similar clothing product URLs from a style description."
+        description="Find a specific clothing product URL from a style description."
     )
     parser.add_argument(
         "style",
@@ -36,17 +57,18 @@ def parse_args() -> argparse.Namespace:
         "--limit",
         type=int,
         default=DEFAULT_LIMIT,
-        help=f"Maximum number of results to print (default: {DEFAULT_LIMIT})",
+        help=f"Maximum number of results to collect before selecting output URL (default: {DEFAULT_LIMIT})",
     )
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Print machine-readable JSON output instead of text output.",
+        help="Print machine-readable JSON output.",
     )
     parser.add_argument(
-        "--show-snippet",
-        action="store_true",
-        help="Include snippets in text output.",
+        "--max-attempts",
+        type=int,
+        default=MAX_BACKPLAN_ATTEMPTS,
+        help=f"Maximum number of backplan attempts (default: {MAX_BACKPLAN_ATTEMPTS})",
     )
     return parser.parse_args()
 
@@ -63,7 +85,12 @@ def build_query(style: str) -> str:
     return f"{normalized} clothing outfit online store buy"
 
 
-def search_serper(query: str, api_key: str, num_results: int = DEFAULT_RESULT_COUNT) -> dict:
+def search_serper(
+    query: str,
+    api_key: str,
+    num_results: int = DEFAULT_RESULT_COUNT,
+    endpoint: str = SERPER_API_URL,
+) -> dict:
     import requests  # lazy import keeps --help working without deps installed
 
     headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
@@ -72,7 +99,7 @@ def search_serper(query: str, api_key: str, num_results: int = DEFAULT_RESULT_CO
     for attempt in range(3):
         try:
             response = requests.post(
-                SERPER_API_URL,
+                endpoint,
                 headers=headers,
                 json=payload,
                 timeout=20,
@@ -121,6 +148,17 @@ def is_blocked_domain(url: str) -> bool:
     return any(domain == blocked or domain.endswith(f".{blocked}") for blocked in BLOCKED_DOMAINS)
 
 
+def is_non_store_domain(url: str) -> bool:
+    domain = domain_from_url(url)
+    return any(domain == blocked or domain.endswith(f".{blocked}") for blocked in NON_STORE_DOMAINS)
+
+
+def is_google_redirect_url(url: str) -> bool:
+    parsed = urlparse(url)
+    domain = domain_from_url(url)
+    return domain.endswith("google.com") and parsed.path.startswith("/search")
+
+
 def extract_results(payload: dict) -> list[dict[str, str]]:
     results: list[dict[str, str]] = []
     for item in payload.get("organic", []):
@@ -129,12 +167,15 @@ def extract_results(payload: dict) -> list[dict[str, str]]:
             continue
         if is_blocked_domain(link):
             continue
+        if is_non_store_domain(link):
+            continue
+        if is_google_redirect_url(link):
+            continue
 
         title = item.get("title") if isinstance(item.get("title"), str) else "Untitled result"
         snippet = item.get("snippet") if isinstance(item.get("snippet"), str) else ""
         results.append({"title": title.strip(), "url": link.strip(), "snippet": snippet.strip()})
 
-    # Stable dedupe by URL
     seen: set[str] = set()
     deduped: list[dict[str, str]] = []
     for result in results:
@@ -145,6 +186,61 @@ def extract_results(payload: dict) -> list[dict[str, str]]:
     return deduped
 
 
+def extract_shopping_results(payload: dict) -> list[dict[str, str]]:
+    results: list[dict[str, str]] = []
+    for item in payload.get("shopping", []):
+        link = item.get("link")
+        if not isinstance(link, str) or not link.startswith(("http://", "https://")):
+            continue
+        if is_blocked_domain(link):
+            continue
+        if is_non_store_domain(link):
+            continue
+        if is_google_redirect_url(link):
+            continue
+
+        title = item.get("title") if isinstance(item.get("title"), str) else "Untitled result"
+        snippet = item.get("snippet") if isinstance(item.get("snippet"), str) else ""
+        results.append({"title": title.strip(), "url": link.strip(), "snippet": snippet.strip()})
+
+    seen: set[str] = set()
+    deduped: list[dict[str, str]] = []
+    for result in results:
+        url = result["url"]
+        if url not in seen:
+            seen.add(url)
+            deduped.append(result)
+    return deduped
+
+
+def resolve_shopping_to_product_url(
+    shopping_payload: dict, api_key: str, limit: int
+) -> tuple[str, list[dict[str, str]]]:
+    for item in shopping_payload.get("shopping", [])[:5]:
+        title = item.get("title")
+        source = item.get("source")
+        if not isinstance(title, str) or not title.strip():
+            continue
+
+        query_parts = [title.strip()]
+        if isinstance(source, str) and source.strip():
+            query_parts.append(source.strip())
+        query_parts.append("buy")
+        query = " ".join(query_parts)
+
+        try:
+            payload = search_serper(query, api_key, num_results=max(limit, 10))
+        except Exception:
+            continue
+
+        results = extract_results(payload)
+        output_url = select_output_url(results)
+        if output_url:
+            return output_url, results
+
+    return "", []
+
+
 def prompt_if_missing(style: str | None) -> str:
     if style:
         return style.strip()
@@ -153,37 +249,156 @@ def prompt_if_missing(style: str | None) -> str:
     return input("Describe the style to match: ").strip()
 
 
+def resolve_style_input(cli_style: str | None) -> str:
+    candidate = cli_style
+    if not candidate and PROMPT:
+        candidate = PROMPT
+    return prompt_if_missing(candidate)
+
+
 def validate_limit(limit: int) -> int:
     if limit <= 0:
         raise ValueError("--limit must be > 0")
     return limit
 
 
-def print_text(results: Iterable[dict[str, str]], limit: int, show_snippet: bool) -> None:
-    for idx, result in enumerate(results, start=1):
-        if idx > limit:
-            break
-        print(f"{idx}. {result['title']}")
-        print(f"   {result['url']}")
-        if show_snippet and result["snippet"]:
-            print(f"   {result['snippet']}")
-        print()
+def validate_max_attempts(max_attempts: int) -> int:
+    if max_attempts <= 0:
+        raise ValueError("--max-attempts must be > 0")
+    return max_attempts
 
 
-def print_json(results: list[dict[str, str]], limit: int) -> None:
-    print(json.dumps(results[:limit], indent=2))
+def is_likely_product_url(url: str) -> bool:
+    parsed = urlparse(url)
+    path = parsed.path.lower().strip("/")
+    query = parsed.query.lower()
+
+    if not path:
+        return False
+
+    product_path_markers = (
+        "/product/",
+        "/products/",
+        "/item/",
+        "/dp/",
+        "/p/",
+    )
+    if any(marker in parsed.path.lower() for marker in product_path_markers):
+        return True
+
+    if any(token in query for token in ("product", "sku=", "pid=", "variant=", "item=")):
+        return True
+
+    non_product_path_markers = (
+        "/collections/",
+        "/collection/",
+        "/category/",
+        "/categories/",
+        "/search",
+        "/shop",
+    )
+    if any(marker in parsed.path.lower() for marker in non_product_path_markers):
+        return False
+
+    segments = [segment for segment in path.split("/") if segment]
+    if len(segments) >= 2 and any(char.isdigit() for char in path):
+        return True
+
+    return False
+
+
+def select_output_url(results: Iterable[dict[str, str]]) -> str:
+    global URL
+    result_list = list(results)
+    if not result_list:
+        URL = ""
+        return URL
+
+    for result in result_list:
+        if is_likely_product_url(result["url"]):
+            URL = result["url"]
+            return URL
+
+    URL = ""
+    return URL
+
+
+def build_backplan(style: str, max_attempts: int) -> list[tuple[str, str]]:
+    plan: list[tuple[str, str]] = [(SERPER_API_URL, build_query(style))]
+    for suffix in BACKPLAN_QUERY_SUFFIXES:
+        plan.append((SERPER_API_URL, f"{style} {suffix}"))
+    plan.append((SERPER_SHOPPING_API_URL, f"{style} clothing"))
+    return plan[:max_attempts]
+
+
+def find_product_url_with_backplan(
+    style: str, api_key: str, limit: int, max_attempts: int
+) -> tuple[str, list[dict[str, str]], int, list[str]]:
+    attempts = 0
+    errors: list[str] = []
+    latest_results: list[dict[str, str]] = []
+
+    for endpoint, query in build_backplan(style, max_attempts):
+        attempts += 1
+        try:
+            payload = search_serper(
+                query,
+                api_key,
+                num_results=max(limit + 10, DEFAULT_RESULT_COUNT),
+                endpoint=endpoint,
+            )
+        except Exception as exc:
+            errors.append(f"attempt {attempts}: {exc}")
+            continue
+
+        if endpoint == SERPER_SHOPPING_API_URL:
+            attempt_results = extract_shopping_results(payload)
+        else:
+            attempt_results = extract_results(payload)
+
+        if attempt_results:
+            latest_results = attempt_results
+
+        output_url = select_output_url(attempt_results)
+        if output_url:
+            return output_url, latest_results, attempts, errors
+
+        if endpoint == SERPER_SHOPPING_API_URL:
+            resolved_url, resolved_results = resolve_shopping_to_product_url(payload, api_key, limit)
+            if resolved_results:
+                latest_results = resolved_results
+            if resolved_url:
+                return resolved_url, latest_results, attempts, errors
+
+    return "", latest_results, attempts, errors
+
+
+def print_json(
+    prompt: str, url: str, results: list[dict[str, str]], limit: int, attempts: int, errors: list[str]
+) -> None:
+    payload = {
+        "prompt": prompt,
+        "url": url,
+        "attempts": attempts,
+        "errors": errors,
+        "results": results[:limit],
+    }
+    print(json.dumps(payload, indent=2))
 
 
 def main() -> int:
+    global URL
+    URL = ""
     args = parse_args()
 
     try:
         limit = validate_limit(args.limit)
+        max_attempts = validate_max_attempts(args.max_attempts)
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
 
-    style_input = prompt_if_missing(args.style)
+    style_input = resolve_style_input(args.style)
     try:
         style = normalize_style(style_input)
     except ValueError as exc:
@@ -192,7 +407,7 @@ def main() -> int:
 
     if not style:
         print(
-            "Error: style description is required. Pass it as an argument in non-interactive mode.",
+            "Error: style description is required. Pass it as an argument or set PROMPT.",
             file=sys.stderr,
         )
         return 2
@@ -205,28 +420,19 @@ def main() -> int:
     api_key = os.getenv("SERPER_API_KEY")
     if not api_key:
         print(
-            "Error: SERPER_API_KEY is not set. Copy .env.example to .env and add your key.",
+            "Error: SERPER_API_KEY is not set. Add it to style-finder/.env.",
             file=sys.stderr,
         )
         return 2
 
-    query = build_query(style)
-
-    try:
-        payload = search_serper(query, api_key)
-        results = extract_results(payload)
-    except Exception as exc:
-        print(f"Error fetching search results: {exc}", file=sys.stderr)
-        return 1
-
-    if not results:
-        print("No similar clothing links found after filtering.")
-        return 0
+    output_url, results, attempts, errors = find_product_url_with_backplan(
+        style, api_key, limit, max_attempts
+    )
 
     if args.json:
-        print_json(results, limit)
+        print_json(style, output_url, results, limit, attempts, errors)
     else:
-        print_text(results, limit, args.show_snippet)
+        print(output_url if output_url else "No specific product URL found after backplan retries.")
 
     return 0
 

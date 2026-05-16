@@ -12,6 +12,10 @@ base_dir = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=base_dir / ".env", override=False)
 load_dotenv(dotenv_path=base_dir.parent / ".env", override=False)
 
+# Use SERPER_API_KEY from .env as the primary key source for runtime integrations.
+if os.getenv("SERPER_API_KEY") and not os.getenv("GOOGLE_API_KEY"):
+    os.environ["GOOGLE_API_KEY"] = os.getenv("SERPER_API_KEY", "")
+
 
 async def create_agent(**kwargs) -> Agent:
     llm = gemini.Realtime(fps=3)

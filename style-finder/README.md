@@ -1,13 +1,19 @@
 # Style Finder Agent
 
-CLI agent that takes a style description, searches for similar clothing online, and prints high-signal links (title + URL).
+AI workflow: take a style prompt, search web stores, and output one URL for a matching item.
+
+## Marker variables
+
+Edit these top-level variables in `main.py` (they are placeholders for later-provided values):
+
+- `PROMPT` → style prompt marker
+- `URL` → output URL marker (updated with the selected result)
 
 ## Setup
 
 ```bash
 cd style-finder
-cp .env.example .env
-# add your SERPER_API_KEY in .env
+printf "SERPER_API_KEY=your_serper_api_key_here\n" > .env
 ```
 
 Install dependencies:
@@ -22,47 +28,41 @@ python3 -m pip install -e .
 
 ## Run
 
+CLI prompt input:
+
 ```bash
 cd style-finder
 uv run python main.py "minimalist monochrome streetwear"
 ```
 
-Interactive prompt mode:
+Marker prompt input (set `PROMPT` in `main.py`, then run without CLI style):
 
 ```bash
 uv run python main.py
 ```
 
-Limit results:
+JSON output:
 
 ```bash
-uv run python main.py "boho summer dresses" --limit 5
+uv run python main.py "techwear monochrome" --json --limit 5 --max-attempts 10
 ```
 
-Include snippets in text output:
+## Output behavior
 
-```bash
-uv run python main.py "90s grunge" --show-snippet
-```
-
-JSON output for automation:
-
-```bash
-uv run python main.py "techwear monochrome" --json --limit 5
-```
-
-## Output
-
-- Default: numbered text output with `title` and `url`
-- `--json`: machine-readable array of objects:
-  - `title`
+- Default output: prints **one URL only** (best first match)
+- Also writes selected URL into `URL` marker variable in process memory
+- `--json` output includes:
+  - `prompt`
   - `url`
-  - `snippet`
+  - `attempts`
+  - `errors`
+  - `results` (top filtered candidates)
+- Use `--max-attempts` to control how many backplan retries are allowed.
 
 ## Notes
 
-- Social/aggregation domains (e.g., Pinterest/Instagram/TikTok/Facebook/X/YouTube) are filtered out.
-- If no links survive filtering, the CLI prints a clear message.
+- Social/aggregation domains (Pinterest/Instagram/TikTok/Facebook/X/YouTube) are filtered out.
+- Serper API key is required via `SERPER_API_KEY`.
 
 ## Quick tests
 
