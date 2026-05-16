@@ -3,10 +3,38 @@ import './App.css';
 
 // Mock Data for Clothes Catalog
 const CLOSET_ITEMS = [
-  { id: 't1', name: 'Cyberpunk Bomber', category: 'Outerwear', price: '$89.00', emoji: '🧥' },
-  { id: 't2', name: 'Classic Denim Jacket', category: 'Outerwear', price: '$65.00', emoji: '🧥' },
-  { id: 't3', name: 'Oversized Linen Shirt', category: 'Tops', price: '$45.00', emoji: '👕' },
-  { id: 't4', name: 'Minimalist Black Tee', category: 'Tops', price: '$28.00', emoji: '👕' },
+  {
+    id: 't1',
+    name: 'Cyberpunk Bomber',
+    category: 'Outerwear',
+    price: '$89.00',
+    emoji: '🧥',
+    imageUrl: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab',
+  },
+  {
+    id: 't2',
+    name: 'Classic Denim Jacket',
+    category: 'Outerwear',
+    price: '$65.00',
+    emoji: '🧥',
+    imageUrl: 'https://images.unsplash.com/photo-1541099649105-f69ad21f3246',
+  },
+  {
+    id: 't3',
+    name: 'Oversized Linen Shirt',
+    category: 'Tops',
+    price: '$45.00',
+    emoji: '👕',
+    imageUrl: 'https://images.unsplash.com/photo-1596755094514-f87e34085b2c',
+  },
+  {
+    id: 't4',
+    name: 'Minimalist Black Tee',
+    category: 'Tops',
+    price: '$28.00',
+    emoji: '👕',
+    imageUrl: 'https://images.unsplash.com/photo-1527719327859-c6ce80353573',
+  },
 ];
 const RECOMMENDATIONS = [
   { id: 'r1', name: 'Cargo Joggers', category: 'Match - 98%', price: '$55.00', emoji: '👖' },
@@ -18,8 +46,27 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('closet');
   const [selectedItem, setSelectedItem] = useState(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [processedImageUrl, setProcessedImageUrl] = useState('');
+  const [syncStatus, setSyncStatus] = useState('DISCONNECTED');
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+
+  const sendAgentEvent = useCallback((type, payload) => {
+    const streamCall = window.streamCall;
+    if (streamCall && typeof streamCall.sendCustomEvent === 'function') {
+      streamCall.sendCustomEvent({ type, payload });
+      setSyncStatus('SYNCED');
+      return;
+    }
+
+    // Fallback bridge for local testing without Stream SDK wiring in this app.
+    window.dispatchEvent(
+      new CustomEvent('agent_custom_event', {
+        detail: { type, payload },
+      })
+    );
+    setSyncStatus('LOCAL_BRIDGE');
+  }, []);
 
   const stopCamera = useCallback(() => {
     const currentStream = streamRef.current || videoRef.current?.srcObject;
@@ -75,6 +122,53 @@ export default function App() {
   }, [isCameraActive, startCamera, stopCamera]);
 
   useEffect(() => {
+    sendAgentEvent('camera_state', { is_camera_active: isCameraActive });
+  }, [isCameraActive, sendAgentEvent]);
+
+  useEffect(() => {
+    const mirrorUpdateHandler = (event) => {
+      const detail = event?.detail || {};
+      const payload = detail?.payload || detail || {};
+      const imageUrl = payload?.image_url;
+      if (typeof imageUrl === 'string' && imageUrl.trim()) {
+        setProcessedImageUrl(imageUrl);
+        setSyncStatus('UPDATED');
+      }
+    };
+
+    const streamCustomHandler = (event) => {
+      const eventType = event?.type || event?.custom?.type;
+      const payload = event?.payload || event?.custom?.payload || {};
+      if (eventType === 'mirror_update') {
+        mirrorUpdateHandler({ detail: payload });
+      }
+    };
+
+    window.addEventListener('mirror_update', mirrorUpdateHandler);
+
+    const streamCall = window.streamCall;
+    let unsubscribeStream = null;
+    if (streamCall && typeof streamCall.on === 'function') {
+      try {
+        const maybeUnsubscribe = streamCall.on('custom', streamCustomHandler);
+        if (typeof maybeUnsubscribe === 'function') {
+          unsubscribeStream = maybeUnsubscribe;
+        }
+        setSyncStatus('STREAM_LISTENING');
+      } catch {
+        setSyncStatus('LOCAL_BRIDGE');
+      }
+    }
+
+    return () => {
+      window.removeEventListener('mirror_update', mirrorUpdateHandler);
+      if (typeof unsubscribeStream === 'function') {
+        unsubscribeStream();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     const previousBodyOverflowX = document.body.style.overflowX;
     const previousBodyMargin = document.body.style.margin;
     const previousHtmlOverflowX = document.documentElement.style.overflowX;
@@ -91,6 +185,15 @@ export default function App() {
     };
   }, [stopCamera]);
 
+  const handleCalibrate = useCallback(() => {
+    if (!selectedItem) return;
+    sendAgentEvent('set_merchandise', {
+      item_id: selectedItem.id,
+      image_url: selectedItem.imageUrl,
+      item_name: selectedItem.name,
+    });
+  }, [selectedItem, sendAgentEvent]);
+
   return (
     <div className="app-container">
       {/* Left Pane: The Smart Mirror Interface */}
@@ -102,10 +205,10 @@ export default function App() {
 
         <div className="mirror-view-wrapper">
           {isCameraActive ? (
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
               className="camera-feed"
             />
           ) : (
@@ -115,11 +218,20 @@ export default function App() {
             </div>
           )}
 
+          {processedImageUrl ? (
+            <img
+              src={processedImageUrl}
+              alt="Try-on result"
+              className="camera-feed"
+              style={{ position: 'absolute', inset: 0, objectFit: 'cover', opacity: 0.88 }}
+            />
+          ) : null}
+
           {/* Smart Mirror HUD Overlay */}
           <div className="mirror-overlay">
             <div className="overlay-badge">
               <div className="badge-pulse"></div>
-              <span>{isCameraActive ? 'SYSTEM ACTIVE' : 'STANDBY'}</span>
+              <span>{isCameraActive ? 'SYSTEM ACTIVE' : 'STANDBY'} · {syncStatus}</span>
             </div>
 
             {isCameraActive && <div className="scan-line"></div>}
@@ -128,9 +240,9 @@ export default function App() {
               <button className="btn" onClick={toggleCamera}>
                 {isCameraActive ? 'Power Down Mirror' : 'Initialize Mirror'}
               </button>
-              <button 
+              <button
                 className={`btn btn-primary ${!selectedItem ? 'disabled' : ''}`}
-                onClick={() => alert(`Analyzing fitment data for: ${selectedItem?.name}`)}
+                onClick={handleCalibrate}
                 disabled={!selectedItem}
               >
                 Calibrate Fitment
@@ -143,13 +255,13 @@ export default function App() {
       {/* Right Pane: Catalog and Recommendation Engine */}
       <aside className="sidebar">
         <nav className="tabs">
-          <button 
+          <button
             className={`tab-btn ${activeTab === 'closet' ? 'active' : ''}`}
             onClick={() => setActiveTab('closet')}
           >
             My Closet
           </button>
-          <button 
+          <button
             className={`tab-btn ${activeTab === 'ai' ? 'active' : ''}`}
             onClick={() => setActiveTab('ai')}
           >
