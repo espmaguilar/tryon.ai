@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 
 // Mock Data for Clothes Catalog
@@ -8,7 +8,6 @@ const CLOSET_ITEMS = [
   { id: 't3', name: 'Oversized Linen Shirt', category: 'Tops', price: '$45.00', emoji: '👕' },
   { id: 't4', name: 'Minimalist Black Tee', category: 'Tops', price: '$28.00', emoji: '👕' },
 ];
-
 const RECOMMENDATIONS = [
   { id: 'r1', name: 'Cargo Joggers', category: 'Match - 98%', price: '$55.00', emoji: '👖' },
   { id: 'r2', name: 'Techwear Boots', category: 'Match - 92%', price: '$120.00', emoji: '🥾' },
@@ -20,28 +19,77 @@ export default function App() {
   const [selectedItem, setSelectedItem] = useState(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const videoRef = useRef(null);
+  const streamRef = useRef(null);
+
+  const stopCamera = useCallback(() => {
+    const currentStream = streamRef.current || videoRef.current?.srcObject;
+    const tracks = currentStream?.getTracks?.() || [];
+    tracks.forEach((track) => track.stop());
+
+    streamRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    setIsCameraActive(false);
+  }, []);
+
+  const startCamera = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert('Camera access is not supported in this browser.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: 'user',
+        },
+        audio: false,
+      });
+
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+
+      setIsCameraActive(true);
+    } catch (err) {
+      console.error('Error accessing camera:', err);
+      alert('Could not access camera. Please check your permissions.');
+      stopCamera();
+    }
+  }, [stopCamera]);
 
   // Handle turning webcam on/off
-  const toggleCamera = async () => {
+  const toggleCamera = useCallback(async () => {
     if (isCameraActive) {
-      const stream = videoRef.current?.srcObject;
-      const tracks = stream?.getTracks();
-      tracks?.forEach(track => track.stop());
-      if (videoRef.current) videoRef.current.srcObject = null;
-      setIsCameraActive(false);
-    } else {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-        setIsCameraActive(true);
-      } catch (err) {
-        console.error("Error accessing camera: ", err);
-        alert("Could not access camera. Please check your permissions.");
-      }
+      stopCamera();
+      return;
     }
-  };
+
+    await startCamera();
+  }, [isCameraActive, startCamera, stopCamera]);
+
+  useEffect(() => {
+    const previousBodyOverflowX = document.body.style.overflowX;
+    const previousBodyMargin = document.body.style.margin;
+    const previousHtmlOverflowX = document.documentElement.style.overflowX;
+
+    document.body.style.overflowX = 'hidden';
+    document.body.style.margin = '0';
+    document.documentElement.style.overflowX = 'hidden';
+
+    return () => {
+      stopCamera();
+      document.body.style.overflowX = previousBodyOverflowX;
+      document.body.style.margin = previousBodyMargin;
+      document.documentElement.style.overflowX = previousHtmlOverflowX;
+    };
+  }, [stopCamera]);
 
   return (
     <div className="app-container">
