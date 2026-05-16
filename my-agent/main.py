@@ -20,6 +20,7 @@ async def join_call(agent: Agent, call_type: str, call_id: str, **kwargs) -> Non
     async with agent.join(call):
         await agent.simple_response("Greet the user")
         await agent.finish()
+        #Make the agent a decart agent. 
 
 if __name__ == "__main__":
     Runner(AgentLauncher(create_agent=create_agent, join_call=join_call)).cli()

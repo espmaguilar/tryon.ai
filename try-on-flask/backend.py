@@ -1,4 +1,4 @@
-import os
+"""import os
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -19,10 +19,10 @@ stream_client = Stream(
 
 @app.route('/api/auth-mirror', methods=['POST'])
 def auth_mirror_user():
-    """
+    ""
     Endpoint called by the frontend kiosk.
     Expects a unique user_id (e.g., 'kiosk-01' or a temporary guest session ID).
-    """
+    ""
     data = request.get_json() or {}
     user_id = data.get("user_id")
     
@@ -52,10 +52,10 @@ def auth_mirror_user():
 
 @app.route('/api/create-session', methods=['POST'])
 def create_video_session():
-    """
+    ""
     Optional: Explicitly pre-create or configure a video call/mirror room 
     from the backend if you need to restrict access or log metrics.
-    """
+    ""
     data = request.get_json() or {}
     call_id = data.get("call_id") # e.g., "mirror-room-booth-A"
     user_id = data.get("user_id")
@@ -73,4 +73,4 @@ def create_video_session():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    app.run(port=5000, debug=True) """
