@@ -21,8 +21,8 @@ async def create_agent(**kwargs) -> Agent:
     llm = gemini.Realtime(fps=3)
 
     nano_processor = NanoBananaProcessor(
-        api_key=os.getenv("NANO_BANANA_API_KEY"),
-        model=os.getenv("NANO_BANANA_MODEL", "nano-banana-2"),
+        api_key=os.getenv("GOOGLE_API_KEY"),
+        model=os.getenv("NANO_BANANA_MODEL", "gemini-2.5-flash-image"),
         output_dir=os.getenv("TRYON_OUTPUT_DIR", str(base_dir / "outputs")),
     )
 
@@ -34,7 +34,14 @@ async def create_agent(**kwargs) -> Agent:
         return f"Merchandise set to: {value}"
 
     @llm.register_function(
-        description="Generate a virtual try-on result using the latest camera frame and selected merchandise."
+        description="Set the captured customer pose image (from pose/camera capture pipeline). Input should be an image URL or local file path."
+    )
+    async def set_pose_image(image_path_or_url: str) -> str:
+        value = await nano_processor.set_pose_image(image_path_or_url)
+        return f"Pose image set to: {value}"
+
+    @llm.register_function(
+        description="Generate a virtual try-on result using the captured pose image (or latest camera frame fallback) and selected merchandise."
     )
     async def try_on_current_item() -> str:
         result = await nano_processor.generate_tryon()
@@ -50,13 +57,18 @@ async def create_agent(**kwargs) -> Agent:
         await nano_processor.clear_merchandise()
         return "Merchandise cleared."
 
+    @llm.register_function(description="Clear the captured customer pose image.")
+    async def clear_pose_image() -> str:
+        await nano_processor.clear_pose_image()
+        return "Pose image cleared."
+
     return Agent(
         edge=getstream.Edge(),
         agent_user=User(name="Assistant", id="agent"),
         instructions=(
             "You are a virtual mirror assistant. Help the user try on merchandise. "
-            "Use set_merchandise to choose an item, then use try_on_current_item to generate "
-            "a mirror result from the latest camera frame."
+            "Use set_merchandise to choose an item, set_pose_image with the captured customer pose image, "
+            "then use try_on_current_item to generate a mirror try-on result."
         ),
         llm=llm,
         processors=[nano_processor],
@@ -72,7 +84,7 @@ async def join_call(agent: Agent, call_type: str, call_id: str, **kwargs) -> Non
 
     async with agent.join(call):
         await agent.simple_response(
-            "Hi! I can help with virtual try-on. Tell me the merchandise image URL, then ask me to generate the try-on."
+            "Hi! I can help with virtual try-on. Provide the merchandise image URL/path and the captured pose image URL/path, then ask me to generate the try-on."
         )
         await agent.finish()
 

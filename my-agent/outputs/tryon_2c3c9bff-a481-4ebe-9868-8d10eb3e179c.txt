@@ -1,0 +1,3 @@
+Nano Banana API hook pending.
+merchandise=https://example.com/shirt.png
+model=nano-banana-2

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 
 // Mock Data for Clothes Catalog
@@ -17,7 +17,7 @@ const RECOMMENDATIONS = [
 export default function App() {
   const [activeTab, setActiveTab] = useState('closet');
   const [selectedItem, setSelectedItem] = useState(null);
-  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isMirrorActive, setIsMirrorActive] = useState(false);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
 
@@ -31,7 +31,7 @@ export default function App() {
       videoRef.current.srcObject = null;
     }
 
-    setIsCameraActive(false);
+    setIsMirrorActive(false);
   }, []);
 
   const startCamera = useCallback(async () => {
@@ -56,7 +56,7 @@ export default function App() {
         videoRef.current.srcObject = stream;
       }
 
-      setIsCameraActive(true);
+      setIsMirrorActive(true);
     } catch (err) {
       console.error('Error accessing camera:', err);
       alert('Could not access camera. Please check your permissions.');
@@ -64,35 +64,30 @@ export default function App() {
     }
   }, [stopCamera]);
 
-  // Handle turning webcam on/off
-  const toggleCamera = useCallback(async () => {
-    if (isCameraActive) {
+  const handleMirrorToggle = useCallback(async () => {
+    if (isMirrorActive) {
       stopCamera();
       return;
     }
 
     await startCamera();
-  }, [isCameraActive, startCamera, stopCamera]);
+  }, [isMirrorActive, startCamera, stopCamera]);
 
   useEffect(() => {
-    const previousBodyOverflowX = document.body.style.overflowX;
-    const previousBodyMargin = document.body.style.margin;
-    const previousHtmlOverflowX = document.documentElement.style.overflowX;
+    if (isMirrorActive && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+    }
+  }, [isMirrorActive]);
 
-    document.body.style.overflowX = 'hidden';
-    document.body.style.margin = '0';
-    document.documentElement.style.overflowX = 'hidden';
-
-    return () => {
-      stopCamera();
-      document.body.style.overflowX = previousBodyOverflowX;
-      document.body.style.margin = previousBodyMargin;
-      document.documentElement.style.overflowX = previousHtmlOverflowX;
-    };
+  useEffect(() => () => {
+    stopCamera();
   }, [stopCamera]);
 
   return (
-    <div className="app-container">
+    <div
+      className="app-container"
+      style={{ width: '100%', minHeight: '100vh', overflowX: 'hidden', overflowY: 'auto' }}
+    >
       {/* Left Pane: The Smart Mirror Interface */}
       <main className="mirror-section">
         <header className="mirror-header">
@@ -100,16 +95,17 @@ export default function App() {
           <p>Interactive Smart Mirror System v1.0</p>
         </header>
 
-        <div className="mirror-view-wrapper">
-          {isCameraActive ? (
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
+        <div className="mirror-view-wrapper" style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}>
+          {isMirrorActive ? (
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
               className="camera-feed"
+              style={{ width: '100%', height: '100%', flex: '1 1 auto', objectFit: 'cover' }}
             />
           ) : (
-            <div className="camera-placeholder">
+            <div className="camera-placeholder" style={{ width: '100%', height: '100%', flex: '1 1 auto' }}>
               <span style={{ fontSize: '3rem' }}>🪞</span>
               <p>Mirror display is offline</p>
             </div>
@@ -119,22 +115,24 @@ export default function App() {
           <div className="mirror-overlay">
             <div className="overlay-badge">
               <div className="badge-pulse"></div>
-              <span>{isCameraActive ? 'SYSTEM ACTIVE' : 'STANDBY'}</span>
+              <span>{isMirrorActive ? 'SYSTEM ACTIVE' : 'STANDBY'}</span>
             </div>
 
-            {isCameraActive && <div className="scan-line"></div>}
+            {isMirrorActive && <div className="scan-line"></div>}
 
-            <div className="mirror-controls">
-              <button className="btn" onClick={toggleCamera}>
-                {isCameraActive ? 'Power Down Mirror' : 'Initialize Mirror'}
-              </button>
-              <button 
-                className={`btn btn-primary ${!selectedItem ? 'disabled' : ''}`}
-                onClick={() => alert(`Analyzing fitment data for: ${selectedItem?.name}`)}
-                disabled={!selectedItem}
-              >
-                Calibrate Fitment
-              </button>
+            <div className="mirror-controls-container">
+              <div className="mirror-controls">
+                <button className="btn" onClick={handleMirrorToggle}>
+                  {isMirrorActive ? 'Stop Mirror' : 'Start Mirror'}
+                </button>
+                <button
+                  className={`btn btn-primary ${!selectedItem ? 'disabled' : ''}`}
+                  onClick={() => alert(`Analyzing fitment data for: ${selectedItem?.name}`)}
+                  disabled={!selectedItem}
+                >
+                  Calibrate Fitment
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -143,13 +141,13 @@ export default function App() {
       {/* Right Pane: Catalog and Recommendation Engine */}
       <aside className="sidebar">
         <nav className="tabs">
-          <button 
+          <button
             className={`tab-btn ${activeTab === 'closet' ? 'active' : ''}`}
             onClick={() => setActiveTab('closet')}
           >
             My Closet
           </button>
-          <button 
+          <button
             className={`tab-btn ${activeTab === 'ai' ? 'active' : ''}`}
             onClick={() => setActiveTab('ai')}
           >
@@ -161,41 +159,45 @@ export default function App() {
           {activeTab === 'closet' ? (
             <>
               <h2>Select a garment to overlay</h2>
-              <div className="item-grid">
-                {CLOSET_ITEMS.map((item) => (
-                  <button
-                    key={item.id}
-                    className={`item-card ${selectedItem?.id === item.id ? 'selected' : ''}`}
-                    onClick={() => setSelectedItem(item)}
-                  >
-                    <div className="item-image-placeholder">{item.emoji}</div>
-                    <div className="item-info">
-                      <h3>{item.name}</h3>
-                      <p>{item.category}</p>
-                    </div>
-                    <div className="item-price">{item.price}</div>
-                  </button>
-                ))}
+              <div className="item-grid-container">
+                <div className="item-grid">
+                  {CLOSET_ITEMS.map((item) => (
+                    <button
+                      key={item.id}
+                      className={`item-card ${selectedItem?.id === item.id ? 'selected' : ''}`}
+                      onClick={() => setSelectedItem(item)}
+                    >
+                      <div className="item-image-placeholder">{item.emoji}</div>
+                      <div className="item-info">
+                        <h3>{item.name}</h3>
+                        <p>{item.category}</p>
+                      </div>
+                      <div className="item-price">{item.price}</div>
+                    </button>
+                  ))}
+                </div>
               </div>
             </>
           ) : (
             <>
               <h2>Recommended Complements</h2>
-              <div className="item-grid">
-                {RECOMMENDATIONS.map((item) => (
-                  <button
-                    key={item.id}
-                    className="item-card"
-                    onClick={() => alert(`Redirecting to online merchant catalogue for ${item.name}`)}
-                  >
-                    <div className="item-image-placeholder">{item.emoji}</div>
-                    <div className="item-info">
-                      <h3>{item.name}</h3>
-                      <p style={{ color: '#10b981', fontWeight: '600' }}>{item.category}</p>
-                    </div>
-                    <div className="item-price">{item.price}</div>
-                  </button>
-                ))}
+              <div className="item-grid-container">
+                <div className="item-grid">
+                  {RECOMMENDATIONS.map((item) => (
+                    <button
+                      key={item.id}
+                      className="item-card"
+                      onClick={() => alert(`Redirecting to online merchant catalogue for ${item.name}`)}
+                    >
+                      <div className="item-image-placeholder">{item.emoji}</div>
+                      <div className="item-info">
+                        <h3>{item.name}</h3>
+                        <p style={{ color: '#10b981', fontWeight: '600' }}>{item.category}</p>
+                      </div>
+                      <div className="item-price">{item.price}</div>
+                    </button>
+                  ))}
+                </div>
               </div>
             </>
           )}

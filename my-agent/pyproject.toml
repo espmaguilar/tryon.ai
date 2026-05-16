@@ -6,6 +6,8 @@ requires-python = ">=3.12,<4.0"
 dependencies = [
     "vision-agents[decart,gemini,getstream]",
     "python-dotenv",
+    "google-genai",
+    "pillow",
 ]
 
 [project.urls]
