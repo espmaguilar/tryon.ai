@@ -13,7 +13,9 @@ A minimal Vision Agents voice assistant project configured for Python 3.12.
    ```text
    STREAM_API_KEY=
    STREAM_API_SECRET=
-   SERPER_API_KEY=
+   GOOGLE_API_KEY=
+   serper_API=
+   groq_API=
    ```
 
 3. Run the assistant:

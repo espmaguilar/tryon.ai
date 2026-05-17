@@ -58,7 +58,7 @@ Add Nano Banana wiring while preserving existing processors:
 
 ### 3) Environment variables (`.env` usage only, no hardcoded secrets)
 Expected keys:
-- `NANO_BANANA_API_KEY` (required for real model calls)
+- `GOOGLE_API_KEY` (required for real model calls)
 - optional:
   - `NANO_BANANA_MODEL` (default model id)
   - `TRYON_OUTPUT_DIR` (default `./outputs`)

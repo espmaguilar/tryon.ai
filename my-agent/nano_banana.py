@@ -249,7 +249,7 @@ class NanoBananaProcessor:
             return {
                 "status": "error",
                 "reason": "missing_api_key",
-                "message": "NANO_BANANA_API_KEY is not set.",
+                "message": "GOOGLE_API_KEY is not set.",
             }
 
         try:

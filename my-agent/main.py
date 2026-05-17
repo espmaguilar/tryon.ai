@@ -12,9 +12,9 @@ base_dir = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=base_dir / ".env", override=False)
 load_dotenv(dotenv_path=base_dir.parent / ".env", override=False)
 
-# Use SERPER_API_KEY from .env as the primary key source for runtime integrations.
-if os.getenv("SERPER_API_KEY") and not os.getenv("GOOGLE_API_KEY"):
-    os.environ["GOOGLE_API_KEY"] = os.getenv("SERPER_API_KEY", "")
+# Use serper_API from .env as the primary key source for runtime integrations.
+if os.getenv("serper_API") and not os.getenv("GOOGLE_API_KEY"):
+    os.environ["GOOGLE_API_KEY"] = os.getenv("serper_API", "")
 
 
 async def create_agent(**kwargs) -> Agent:
@@ -111,8 +111,14 @@ async def join_call(agent: Agent, call_type: str, call_id: str, **kwargs) -> Non
             if event_type == "set_merchandise":
                 image_url = payload.get("image_url")
                 item_id = payload.get("item_id")
+                pose_image_url = payload.get("pose_image_url")
+
                 if isinstance(image_url, str) and image_url.strip():
                     await nano_processor.set_merchandise(image_url)
+
+                    if isinstance(pose_image_url, str) and pose_image_url.strip():
+                        await nano_processor.set_pose_image(pose_image_url)
+
                     result = await nano_processor.generate_tryon()
                     result["item_id"] = item_id
                     await nano_processor.emit_result(result)
