@@ -417,10 +417,10 @@ def main() -> int:
     dotenv_path = Path(__file__).resolve().parent / ".env"
     load_dotenv(dotenv_path=dotenv_path, override=False)
 
-    api_key = os.getenv("SERPER_API_KEY")
+    api_key = os.getenv("serper_API")
     if not api_key:
         print(
-            "Error: SERPER_API_KEY is not set. Add it to style-finder/.env.",
+            "Error: serper_API is not set. Add it to style-finder/.env.",
             file=sys.stderr,
         )
         return 2

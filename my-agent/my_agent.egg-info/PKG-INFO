@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: my-agent
+Version: 0.1.0
+Summary: Vision Agents voice assistant example
+Project-URL: Homepage, https://visionagents.ai
+Requires-Python: <4.0,>=3.12
+Requires-Dist: vision-agents[decart,gemini,getstream]
+Requires-Dist: python-dotenv
+Requires-Dist: google-genai
+Requires-Dist: pillow
