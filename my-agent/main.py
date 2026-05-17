@@ -1,3 +1,4 @@
+import asyncio
 import os
 from pathlib import Path
 
@@ -108,7 +109,7 @@ async def join_call(agent: Agent, call_type: str, call_id: str, **kwargs) -> Non
             event_type = event.get("type")
             payload = event.get("payload", {}) or {}
 
-            if event_type == "set_merchandise":
+            if event_type in {"set_merchandise", "generate_tryon"}:
                 image_url = payload.get("image_url")
                 item_id = payload.get("item_id")
                 pose_image_url = payload.get("pose_image_url")
@@ -116,12 +117,12 @@ async def join_call(agent: Agent, call_type: str, call_id: str, **kwargs) -> Non
                 if isinstance(image_url, str) and image_url.strip():
                     await nano_processor.set_merchandise(image_url)
 
-                    if isinstance(pose_image_url, str) and pose_image_url.strip():
-                        await nano_processor.set_pose_image(pose_image_url)
+                if isinstance(pose_image_url, str) and pose_image_url.strip():
+                    await nano_processor.set_pose_image(pose_image_url)
 
-                    result = await nano_processor.generate_tryon()
-                    result["item_id"] = item_id
-                    await nano_processor.emit_result(result)
+                result = await nano_processor.generate_tryon()
+                result["item_id"] = item_id
+                await nano_processor.emit_result(result)
 
             elif event_type == "camera_state":
                 # Reserved for future frame/camera gating logic.
@@ -137,7 +138,7 @@ async def join_call(agent: Agent, call_type: str, call_id: str, **kwargs) -> Non
         await agent.simple_response(
             "Hi! I can help with virtual try-on. Provide the merchandise image URL/path and the captured pose image URL/path, then ask me to generate the try-on."
         )
-        await agent.finish()
+        await asyncio.Event().wait()
 
 
 if __name__ == "__main__":

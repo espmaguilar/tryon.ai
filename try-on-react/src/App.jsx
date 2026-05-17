@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 
 // Mock Data for Clothes Catalog
@@ -38,9 +38,33 @@ const CLOSET_ITEMS = [
 ];
 
 const RECOMMENDATIONS = [
-  { id: 'r1', name: 'Cargo Joggers', category: 'Match - 98%', price: '$55.00', emoji: '👖' },
-  { id: 'r2', name: 'Techwear Boots', category: 'Match - 92%', price: '$120.00', emoji: '🥾' },
-  { id: 'r3', name: 'Silver Chain Set', category: 'Match - 85%', price: '$19.00', emoji: '⛓️' },
+  {
+    id: 'r1',
+    name: 'Cargo Joggers',
+    category: 'Bottoms',
+    match: 98,
+    price: '$55.00',
+    emoji: '👖',
+    merchantUrl: 'https://www.google.com/search?q=cargo+joggers',
+  },
+  {
+    id: 'r2',
+    name: 'Techwear Boots',
+    category: 'Footwear',
+    match: 92,
+    price: '$120.00',
+    emoji: '🥾',
+    merchantUrl: 'https://www.google.com/search?q=techwear+boots',
+  },
+  {
+    id: 'r3',
+    name: 'Silver Chain Set',
+    category: 'Accessories',
+    match: 85,
+    price: '$19.00',
+    emoji: '⛓️',
+    merchantUrl: 'https://www.google.com/search?q=silver+chain+set',
+  },
 ];
 
 const isLikelyImageUrl = (value) =>
@@ -63,23 +87,94 @@ const toCameraErrorMessage = (err) => {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('closet');
   const [selectedItem, setSelectedItem] = useState(null);
   const [isMirrorActive, setIsMirrorActive] = useState(false);
   const [processedImageUrl, setProcessedImageUrl] = useState('');
   const [showResultOverlay, setShowResultOverlay] = useState(true);
   const [cameraError, setCameraError] = useState('');
   const [manualPoseImageUrl, setManualPoseImageUrl] = useState('');
+  const [isGeneratingTryOn, setIsGeneratingTryOn] = useState(false);
+  const [generationStatus, setGenerationStatus] = useState('Standby');
+  const [backendHealth, setBackendHealth] = useState('offline');
+  const [streamConnectionState, setStreamConnectionState] = useState('idle');
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [diagnostics, setDiagnostics] = useState({
+    lastEvent: 'none',
+    requestId: 'n/a',
+    message: 'No events yet.',
+    updatedAt: 'n/a',
+  });
+  const [voiceToast, setVoiceToast] = useState({
+    visible: false,
+    message: '',
+  });
+
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const fileInputRef = useRef(null);
   const publishedTrackTypeRef = useRef('');
 
+  const styleFinderResults = useMemo(() => {
+    if (!selectedItem) return RECOMMENDATIONS;
+
+    return RECOMMENDATIONS.map((item) => ({
+      ...item,
+      contextLabel: `Works with ${selectedItem.category.toLowerCase()}`,
+    }));
+  }, [selectedItem]);
+
+  const findClosetItem = useCallback((payload) => {
+    const itemId = typeof payload?.item_id === 'string' ? payload.item_id : '';
+    const itemName = typeof payload?.item_name === 'string' ? payload.item_name : '';
+    const itemImage = typeof payload?.image_url === 'string' ? payload.image_url : '';
+
+    const byId = itemId ? CLOSET_ITEMS.find((item) => item.id === itemId) : null;
+    if (byId) return byId;
+
+    const byName = itemName
+      ? CLOSET_ITEMS.find((item) => item.name.toLowerCase() === itemName.toLowerCase())
+      : null;
+    if (byName) return byName;
+
+    const byImage = itemImage
+      ? CLOSET_ITEMS.find((item) => item.imageUrl === itemImage)
+      : null;
+    return byImage || null;
+  }, []);
+
   const sendAgentEvent = useCallback((type, payload) => {
     const streamCall = window.streamCall;
     if (streamCall && typeof streamCall.sendCustomEvent === 'function') {
       streamCall.sendCustomEvent({ type, payload });
+      return true;
     }
+    return false;
+  }, []);
+
+  const emitLocalMirrorUpdate = useCallback((poseImageUrl, garmentName) => {
+    window.dispatchEvent(
+      new CustomEvent('mirror_update', {
+        detail: {
+          image_url: poseImageUrl,
+          local_preview: true,
+          garment_name: garmentName,
+        },
+      }),
+    );
+  }, []);
+
+  const recordDiagnostics = useCallback((next) => {
+    const updatedAt = new Date().toLocaleTimeString();
+    setDiagnostics((prev) => ({
+      ...prev,
+      ...next,
+      updatedAt,
+    }));
+  }, []);
+
+  const showVoiceToast = useCallback((message) => {
+    if (!message) return;
+    setVoiceToast({ visible: true, message });
   }, []);
 
   const stopCamera = useCallback(() => {
@@ -107,7 +202,7 @@ export default function App() {
 
   const startCamera = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
-      setCameraError('Live camera is not supported here. Use Take Photo instead.');
+      setCameraError('Live camera is not supported here. Use Upload / Take Photo instead.');
       return;
     }
 
@@ -137,8 +232,8 @@ export default function App() {
       const streamCall = window.streamCall;
       if (streamCall && typeof streamCall.publish === 'function') {
         try {
-          await streamCall.publish(stream, 'video')
-          publishedTrackTypeRef.current = 'video'
+          await streamCall.publish(stream, 'video');
+          publishedTrackTypeRef.current = 'video';
         } catch (publishErr) {
           console.error('GetStream publish failed:', publishErr);
           setCameraError('Camera is active, but publishing to Stream failed.');
@@ -146,6 +241,7 @@ export default function App() {
       }
 
       setShowResultOverlay(false);
+      setGenerationStatus('Mirror live');
       setCameraError('');
       setIsMirrorActive(true);
     } catch (err) {
@@ -168,13 +264,98 @@ export default function App() {
   }, [isMirrorActive, sendAgentEvent]);
 
   useEffect(() => {
+    const syncBackendHealth = () => {
+      const hasStream = Boolean(window.streamCall);
+      setBackendHealth((prev) => {
+        if (hasStream && (prev === 'offline' || prev === 'error')) return 'online';
+        if (!hasStream && prev === 'online') return 'offline';
+        return prev;
+      });
+    };
+
+    const streamStatusHandler = (event) => {
+      const detail = event?.detail || {};
+      const status = detail?.status || 'unknown';
+
+      setStreamConnectionState(status);
+      if (status === 'online') {
+        setBackendHealth('online');
+        setCameraError('');
+        recordDiagnostics({
+          lastEvent: 'stream_status(online)',
+          message: 'GetStream call connected.',
+        });
+      } else if (status === 'connecting') {
+        setBackendHealth('degraded');
+        recordDiagnostics({
+          lastEvent: 'stream_status(connecting)',
+          message: 'Connecting to GetStream...',
+        });
+      } else if (status === 'offline') {
+        setBackendHealth('offline');
+        recordDiagnostics({
+          lastEvent: 'stream_status(offline)',
+          message: detail?.reason || 'GetStream is not configured.',
+        });
+      } else if (status === 'error') {
+        setBackendHealth('error');
+        setCameraError(detail?.message || 'GetStream connection failed.');
+        recordDiagnostics({
+          lastEvent: 'stream_status(error)',
+          message: detail?.message || 'GetStream connection failed.',
+        });
+      }
+    };
+
+    syncBackendHealth();
+    window.addEventListener('stream_status', streamStatusHandler);
+    const intervalId = window.setInterval(syncBackendHealth, 1500);
+
+    return () => {
+      window.removeEventListener('stream_status', streamStatusHandler);
+      window.clearInterval(intervalId);
+    };
+  }, [recordDiagnostics]);
+
+  useEffect(() => {
     const mirrorUpdateHandler = (event) => {
       const detail = event?.detail || {};
       const payload = detail?.payload || detail || {};
       const imageUrl = payload?.image_url;
+      const errorMessage = payload?.error_message;
+
       if (typeof imageUrl === 'string' && imageUrl.trim()) {
         setProcessedImageUrl(imageUrl);
         setShowResultOverlay(true);
+        setIsGeneratingTryOn(false);
+        if (payload?.local_preview) {
+          setBackendHealth('degraded');
+          setGenerationStatus('Local preview ready (backend offline)');
+          recordDiagnostics({
+            lastEvent: 'mirror_update(local_preview)',
+            message: 'Using offline local preview fallback.',
+          });
+        } else {
+          setBackendHealth('online');
+          setGenerationStatus('NanoBanana try-on ready');
+          recordDiagnostics({
+            lastEvent: 'mirror_update(success)',
+            requestId: payload?.job_id || 'n/a',
+            message: payload?.message || 'Try-on image received from backend.',
+          });
+        }
+      }
+
+      if (typeof errorMessage === 'string' && errorMessage.trim()) {
+        setIsGeneratingTryOn(false);
+        setBackendHealth('error');
+        setCameraError(errorMessage);
+        setGenerationStatus('Try-on failed');
+        recordDiagnostics({
+          lastEvent: 'mirror_update(error)',
+          requestId: payload?.job_id || 'n/a',
+          message: errorMessage,
+        });
       }
     };
 
@@ -183,6 +364,33 @@ export default function App() {
       const payload = event?.payload || event?.custom?.payload || {};
       if (eventType === 'mirror_update') {
         mirrorUpdateHandler({ detail: payload });
+      }
+
+      if (eventType === 'photo_captured') {
+        const capturedDataUrl = payload?.image_data_url;
+        if (typeof capturedDataUrl === 'string' && capturedDataUrl.startsWith('data:image/')) {
+          setManualPoseImageUrl(capturedDataUrl);
+          setGenerationStatus('Voice capture ready');
+          setCameraError('');
+          showVoiceToast('📸 Voice photo captured');
+          recordDiagnostics({
+            lastEvent: 'photo_captured',
+            message: 'Voice agent captured a new photo.',
+          });
+        }
+      }
+
+      if (eventType === 'voice_garment_selected') {
+        const matchedItem = findClosetItem(payload);
+        if (matchedItem) {
+          setSelectedItem(matchedItem);
+          setGenerationStatus(`Voice selected: ${matchedItem.name}`);
+          showVoiceToast(`🧥 Voice selected ${matchedItem.name}`);
+          recordDiagnostics({
+            lastEvent: 'voice_garment_selected',
+            message: `Voice selected garment: ${matchedItem.name}`,
+          });
+        }
       }
     };
 
@@ -207,7 +415,32 @@ export default function App() {
         unsubscribeStream();
       }
     };
-  }, []);
+  }, [findClosetItem, recordDiagnostics, showVoiceToast]);
+
+  useEffect(() => {
+    if (!isGeneratingTryOn) return;
+
+    const timeoutId = window.setTimeout(() => {
+      setIsGeneratingTryOn(false);
+      setGenerationStatus('Still waiting for mirror response');
+      setCameraError('Try-on is taking longer than expected. Confirm the Stream backend is running.');
+    }, 25000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [isGeneratingTryOn]);
+
+  useEffect(() => {
+    if (!voiceToast.visible) return;
+    const timeoutId = window.setTimeout(() => {
+      setVoiceToast((prev) => ({ ...prev, visible: false }));
+    }, 2200);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [voiceToast.visible]);
 
   useEffect(() => {
     if (!isMirrorActive || !videoRef.current || !streamRef.current) return;
@@ -270,6 +503,7 @@ export default function App() {
       const dataUrl = typeof reader.result === 'string' ? reader.result : '';
       if (dataUrl.startsWith('data:image/')) {
         setManualPoseImageUrl(dataUrl);
+        setGenerationStatus('Customer photo ready');
         setCameraError('');
       } else {
         setCameraError('Selected file is not a valid image.');
@@ -289,6 +523,7 @@ export default function App() {
         return;
       }
       setManualPoseImageUrl(captured);
+      setGenerationStatus('Snapshot captured');
       return;
     }
 
@@ -298,22 +533,98 @@ export default function App() {
   const handleCalibrate = useCallback(() => {
     if (!selectedItem) return;
     if (!isLikelyImageUrl(selectedItem.imageUrl)) {
-      alert('Selected item does not have a valid direct image URL.');
+      setCameraError('Selected garment does not have a valid direct image URL.');
       return;
     }
 
     const livePoseImageUrl = capturePoseDataUrl();
     const poseImageUrl = livePoseImageUrl || manualPoseImageUrl;
+    if (!poseImageUrl) {
+      setCameraError('Take or upload a customer photo first.');
+      return;
+    }
 
-    sendAgentEvent('set_merchandise', {
-      item_id: selectedItem.id,
-      image_url: selectedItem.imageUrl,
-      item_name: selectedItem.name,
-      pose_image_url: poseImageUrl,
+    setCameraError('');
+    setIsGeneratingTryOn(true);
+    setGenerationStatus('Sending NanoBanana request...');
+    setShowResultOverlay(true);
+
+    const requestId = `tryon-${Date.now()}-${selectedItem.id}`;
+    recordDiagnostics({
+      lastEvent: 'generate_tryon(request)',
+      requestId,
+      message: `Sent request for ${selectedItem.name}.`,
     });
-  }, [capturePoseDataUrl, manualPoseImageUrl, selectedItem, sendAgentEvent]);
+    const payload = {
+      request_id: requestId,
+      provider: 'nanobanana',
+      item_id: selectedItem.id,
+      item_name: selectedItem.name,
+      image_url: selectedItem.imageUrl,
+      pose_image_url: poseImageUrl,
+      options: {
+        mode: 'virtual_mirror_tryon',
+        source: livePoseImageUrl ? 'camera_capture' : 'uploaded_photo',
+      },
+    };
 
-  const previewPoseUrl = manualPoseImageUrl || processedImageUrl;
+    const sentTryOnEvent = sendAgentEvent('generate_tryon', payload);
+
+    if (sentTryOnEvent) {
+      setBackendHealth('online');
+    }
+
+    if (!sentTryOnEvent) {
+      emitLocalMirrorUpdate(poseImageUrl, selectedItem.name);
+      setBackendHealth('offline');
+      setIsGeneratingTryOn(false);
+      setGenerationStatus('Local try-on preview ready (offline mode)');
+      setCameraError('');
+      recordDiagnostics({
+        lastEvent: 'generate_tryon(local_fallback)',
+        message: 'Stream backend not reachable; using local preview.',
+      });
+    }
+  }, [capturePoseDataUrl, emitLocalMirrorUpdate, manualPoseImageUrl, recordDiagnostics, selectedItem, sendAgentEvent]);
+
+  const handleStyleFinderPick = useCallback(
+    (item) => {
+      sendAgentEvent('style_finder_pick', {
+        recommendation_id: item.id,
+        recommendation_name: item.name,
+        selected_garment_id: selectedItem?.id || null,
+      });
+      window.open(item.merchantUrl, '_blank', 'noopener,noreferrer');
+    },
+    [selectedItem, sendAgentEvent]
+  );
+
+  const handleReconnectStream = useCallback(async () => {
+    const reconnectFn = window.reconnectStream;
+    if (typeof reconnectFn !== 'function') {
+      setCameraError('Reconnect function not available. Refresh the page.');
+      return;
+    }
+
+    try {
+      setStreamConnectionState('connecting');
+      setBackendHealth('degraded');
+      await reconnectFn();
+    } catch {
+      setBackendHealth('error');
+      setCameraError('Reconnect failed. Check Stream credentials and backend agent.');
+    }
+  }, []);
+
+  const previewPoseUrl = processedImageUrl;
+  const backendHealthLabel =
+    backendHealth === 'online'
+      ? 'Backend Connected'
+      : backendHealth === 'degraded'
+        ? 'Offline Preview Mode'
+        : backendHealth === 'error'
+          ? 'Backend Error'
+          : 'Backend Offline';
 
   return (
     <div className="app-container">
@@ -324,64 +635,93 @@ export default function App() {
         </header>
 
         <div className="mirror-view-wrapper">
-          {isMirrorActive ? (
-            <video ref={videoRef} autoPlay muted playsInline className="camera-feed" />
-          ) : previewPoseUrl ? (
-            <img
-              src={previewPoseUrl}
-              alt="Captured pose preview"
-              className="camera-feed"
-              onError={() => setManualPoseImageUrl('')}
-              style={{ pointerEvents: 'none' }}
-            />
-          ) : (
-            <div className="camera-placeholder">
-              <span style={{ fontSize: '3rem' }}>🪞</span>
-              <p>Mirror display is offline</p>
-            </div>
-          )}
+          <div className="mirror-stage">
+            {isMirrorActive ? (
+              <video ref={videoRef} autoPlay muted playsInline className="camera-feed mirrored" />
+            ) : previewPoseUrl ? (
+              <img
+                src={previewPoseUrl}
+                alt="Try-on preview"
+                className="camera-feed mirrored"
+                onError={() => setProcessedImageUrl('')}
+                style={{ pointerEvents: 'none' }}
+              />
+            ) : (
+              <div className="camera-placeholder">
+                <span style={{ fontSize: '3rem' }}>🪞</span>
+                <p>Mirror display is offline</p>
+              </div>
+            )}
 
-          {processedImageUrl && showResultOverlay ? (
-            <img
-              src={processedImageUrl}
-              alt="Try-on result"
-              className="camera-feed"
-              onError={() => setProcessedImageUrl('')}
-              style={{ position: 'absolute', inset: 0, objectFit: 'cover', opacity: 0.88, pointerEvents: 'none' }}
-            />
-          ) : null}
+            {processedImageUrl && showResultOverlay ? (
+              <img
+                src={processedImageUrl}
+                alt="Try-on result"
+                className="camera-feed generated"
+                onError={() => setProcessedImageUrl('')}
+                style={{ opacity: 0.92, pointerEvents: 'none' }}
+              />
+            ) : null}
+          </div>
 
           <div className="mirror-overlay">
             <div className="overlay-badge">
               <div className="badge-pulse"></div>
               <span>{isMirrorActive ? 'SYSTEM ACTIVE' : 'STANDBY'}</span>
             </div>
+            <button
+              className={`backend-health-badge ${backendHealth}`}
+              type="button"
+              onClick={() => setShowDiagnostics((prev) => !prev)}
+              title="Toggle backend diagnostics"
+            >
+              <span>{backendHealthLabel}</span>
+            </button>
+            {showDiagnostics ? (
+              <div className="backend-diagnostics-popover">
+                <p><strong>Last Event:</strong> {diagnostics.lastEvent}</p>
+                <p><strong>Request ID:</strong> {diagnostics.requestId}</p>
+                <p><strong>Message:</strong> {diagnostics.message}</p>
+                <p><strong>Stream State:</strong> {streamConnectionState}</p>
+                <p><strong>Updated:</strong> {diagnostics.updatedAt}</p>
+                <button className="diagnostics-reconnect-btn" type="button" onClick={handleReconnectStream}>
+                  Reconnect Stream
+                </button>
+              </div>
+            ) : null}
+            {voiceToast.visible ? (
+              <div className="voice-toast" role="status" aria-live="polite">
+                {voiceToast.message}
+              </div>
+            ) : null}
 
             {isMirrorActive && <div className="scan-line"></div>}
 
-            <div className="mirror-controls">
-              <button className="btn" onClick={toggleCamera}>
-                {isMirrorActive ? 'Power Down Mirror' : 'Initialize Mirror'}
-              </button>
-              <button className="btn" onClick={handleTakePhoto}>
-                {isMirrorActive ? 'Take Photo' : 'Upload / Take Photo'}
-              </button>
-              <button
-                className={`btn btn-primary ${!selectedItem ? 'disabled' : ''}`}
-                onClick={handleCalibrate}
-                disabled={!selectedItem}
-              >
-                Calibrate Fitment
-              </button>
-              {processedImageUrl ? (
-                <button className="btn" onClick={() => setShowResultOverlay((prev) => !prev)}>
-                  {showResultOverlay ? 'Show Live Camera' : 'Show Try-On Result'}
+            <div className="mirror-bottom-dock">
+              <div className="mirror-controls">
+                <button className="btn" onClick={toggleCamera}>
+                  {isMirrorActive ? 'Power Down Mirror' : 'Initialize Mirror'}
                 </button>
-              ) : null}
+                <button className="btn" onClick={handleTakePhoto}>
+                  {isMirrorActive ? 'Take Photo' : 'Upload / Take Photo'}
+                </button>
+                <button
+                  className={`btn btn-primary ${!selectedItem || isGeneratingTryOn ? 'disabled' : ''}`}
+                  onClick={handleCalibrate}
+                  disabled={!selectedItem || isGeneratingTryOn}
+                >
+                  {isGeneratingTryOn ? 'Generating Try-On...' : 'Generate NanoBanana Try-On'}
+                </button>
+                {processedImageUrl ? (
+                  <button className="btn" onClick={() => setShowResultOverlay((prev) => !prev)}>
+                    {showResultOverlay ? 'Show Live Camera' : 'Show Try-On Result'}
+                  </button>
+                ) : null}
+              </div>
+
+              <p className="generation-status">{generationStatus}</p>
+              {cameraError ? <p className="camera-error">{cameraError}</p> : null}
             </div>
-            {cameraError ? (
-              <p style={{ marginTop: '8px', color: '#fca5a5', fontSize: '0.9rem' }}>{cameraError}</p>
-            ) : null}
           </div>
         </div>
 
@@ -396,63 +736,48 @@ export default function App() {
       </main>
 
       <aside className="sidebar">
-        <nav className="tabs">
-          <button
-            className={`tab-btn ${activeTab === 'closet' ? 'active' : ''}`}
-            onClick={() => setActiveTab('closet')}
-          >
-            My Closet
-          </button>
-          <button
-            className={`tab-btn ${activeTab === 'ai' ? 'active' : ''}`}
-            onClick={() => setActiveTab('ai')}
-          >
-            AI Suggestions
-          </button>
-        </nav>
-
         <section className="panel-content">
-          {activeTab === 'closet' ? (
-            <>
-              <h2>Select a garment to overlay</h2>
-              <div className="item-grid">
-                {CLOSET_ITEMS.map((item) => (
-                  <button
-                    key={item.id}
-                    className={`item-card ${selectedItem?.id === item.id ? 'selected' : ''}`}
-                    onClick={() => setSelectedItem(item)}
-                  >
-                    <div className="item-image-placeholder">{item.emoji}</div>
-                    <div className="item-info">
-                      <h3>{item.name}</h3>
-                      <p>{item.category}</p>
-                    </div>
-                    <div className="item-price">{item.price}</div>
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : (
-            <>
-              <h2>Recommended Complements</h2>
-              <div className="item-grid">
-                {RECOMMENDATIONS.map((item) => (
-                  <button
-                    key={item.id}
-                    className="item-card"
-                    onClick={() => alert(`Redirecting to online merchant catalogue for ${item.name}`)}
-                  >
-                    <div className="item-image-placeholder">{item.emoji}</div>
-                    <div className="item-info">
-                      <h3>{item.name}</h3>
-                      <p style={{ color: '#10b981', fontWeight: '600' }}>{item.category}</p>
-                    </div>
-                    <div className="item-price">{item.price}</div>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
+          <h2>Select a garment to overlay</h2>
+          <div className="item-grid">
+            {CLOSET_ITEMS.map((item) => (
+              <button
+                key={item.id}
+                className={`item-card ${selectedItem?.id === item.id ? 'selected' : ''}`}
+                onClick={() => setSelectedItem(item)}
+              >
+                <div className="item-image-placeholder">{item.emoji}</div>
+                <div className="item-info">
+                  <h3>{item.name}</h3>
+                  <p>{item.category}</p>
+                </div>
+                <div className="item-price">{item.price}</div>
+              </button>
+            ))}
+          </div>
+
+          <section className="style-finder-section">
+            <div className="style-finder-header">
+              <h2>Style Finder</h2>
+              <p>
+                {selectedItem
+                  ? `Recommended complements for ${selectedItem.name}`
+                  : 'Pick a garment to get contextual style recommendations'}
+              </p>
+            </div>
+            <div className="item-grid">
+              {styleFinderResults.map((item) => (
+                <button key={item.id} className="item-card style-finder-card" onClick={() => handleStyleFinderPick(item)}>
+                  <div className="item-image-placeholder">{item.emoji}</div>
+                  <div className="item-info">
+                    <h3>{item.name}</h3>
+                    <p style={{ color: '#10b981', fontWeight: '600' }}>Match - {item.match}%</p>
+                    {item.contextLabel ? <p className="style-context">{item.contextLabel}</p> : null}
+                  </div>
+                  <div className="item-price">{item.price}</div>
+                </button>
+              ))}
+            </div>
+          </section>
         </section>
       </aside>
     </div>

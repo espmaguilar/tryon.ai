@@ -4,12 +4,13 @@ import io
 import time
 import urllib.error
 import urllib.parse
-import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
 
+from google import genai
+from google.genai import types
 from PIL import Image
 
 
@@ -100,16 +101,18 @@ class NanoBananaProcessor:
         if self.call is None:
             return
 
+        status = result.get("status", "unknown")
         payload = {
             "event": "mirror_update",
             "job_id": result.get("job_id"),
             "item_id": result.get("item_id"),
-            "status": result.get("status", "unknown"),
+            "status": status,
             "image_url": result.get("image_url"),
             "source_image_url": self.merchandise_image,
             "latency_ms": result.get("latency_ms"),
             "reason": result.get("reason"),
             "message": result.get("message"),
+            "error_message": result.get("message") if status != "success" else "",
         }
 
         try:
@@ -300,6 +303,23 @@ class NanoBananaProcessor:
                     return decoded
         return None
 
+    @staticmethod
+    def _to_browser_image_url(output_file: Path, image_bytes: bytes) -> str:
+        """
+        Prefer a URL path when output is written under try-on-react/public.
+        Fall back to a data URL so frontend can still render without static hosting.
+        """
+        resolved = output_file.resolve()
+        public_marker = "/try-on-react/public/"
+        resolved_str = resolved.as_posix()
+        marker_index = resolved_str.find(public_marker)
+        if marker_index >= 0:
+            relative = resolved_str[marker_index + len(public_marker):]
+            return f"/{relative}"
+
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        return f"data:image/png;base64,{encoded}"
+
     async def _run_tryon(self, job_id: str) -> dict[str, Any]:
         """
         Real try-on invocation via Google GenAI image model.
@@ -378,9 +398,11 @@ class NanoBananaProcessor:
 
         output_file = self.output_dir / f"tryon_{job_id}.png"
         output_file.write_bytes(image_bytes)
+        browser_image_url = self._to_browser_image_url(output_file, image_bytes)
 
         return {
             "status": "success",
-            "image_url": str(output_file),
+            "image_url": browser_image_url,
+            "local_image_path": str(output_file),
             "message": f"Try-on image generated from {pose_source}.",
         }
