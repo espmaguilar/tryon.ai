@@ -1,0 +1,4 @@
+vision-agents[decart,gemini,getstream]
+python-dotenv
+google-genai
+pillow

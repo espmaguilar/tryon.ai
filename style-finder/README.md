@@ -13,7 +13,7 @@ Edit these top-level variables in `main.py` (they are placeholders for later-pro
 
 ```bash
 cd style-finder
-printf "SERPER_API_KEY=your_serper_api_key_here\n" > .env
+printf "serper_API=your_serper_api_key_here\n" > .env
 ```
 
 Install dependencies:
@@ -62,7 +62,7 @@ uv run python main.py "techwear monochrome" --json --limit 5 --max-attempts 10
 ## Notes
 
 - Social/aggregation domains (Pinterest/Instagram/TikTok/Facebook/X/YouTube) are filtered out.
-- Serper API key is required via `SERPER_API_KEY`.
+- Serper API key is required via `serper_API`.
 
 ## Quick tests
 

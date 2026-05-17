@@ -19,7 +19,9 @@ uv add "vision-agents[getstream,gemini,ultralytics]" python-dotenv
 ```
 STREAM_API_KEY=your_stream_api_key
 STREAM_API_SECRET=your_stream_api_secret
-SERPER_API_KEY=your_serper_api_key
+GOOGLE_API_KEY=your_google_api_key
+serper_API=your_serper_api_key
+groq_API=your_groq_api_key
 ```
 
 3. Place or download a YOLO pose model file named `yolo26n-pose.pt` next to `main.py`.

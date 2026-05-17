@@ -12,9 +12,9 @@ base_dir = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=base_dir / ".env", override=False)
 load_dotenv(dotenv_path=base_dir.parent / ".env", override=False)
 
-# Use SERPER_API_KEY from .env as the primary key source for runtime integrations.
-if os.getenv("SERPER_API_KEY") and not os.getenv("GOOGLE_API_KEY"):
-    os.environ["GOOGLE_API_KEY"] = os.getenv("SERPER_API_KEY", "")
+# Use serper_API from .env as the primary key source for runtime integrations.
+if os.getenv("serper_API") and not os.getenv("GOOGLE_API_KEY"):
+    os.environ["GOOGLE_API_KEY"] = os.getenv("serper_API", "")
 
 
 async def create_agent(**kwargs) -> Agent:
@@ -52,6 +52,22 @@ async def create_agent(**kwargs) -> Agent:
             f"image_url: {result.get('image_url')}"
         )
 
+    @llm.register_function(description="Apply selected frontend item and generate a mirror update.")
+    async def apply_selected_item(item_id: str, image_url: str) -> str:
+        await nano_processor.set_merchandise(image_url)
+        result = await nano_processor.generate_tryon()
+        result["item_id"] = item_id
+        await nano_processor.emit_result(result)
+        return (
+            f"Applied item_id={item_id}, status={result.get('status')}, "
+            f"image_url={result.get('image_url')}"
+        )
+
+    @llm.register_function(description="Update camera active state from frontend.")
+    async def set_camera_state(is_camera_active: bool) -> str:
+        state = "active" if is_camera_active else "inactive"
+        return f"Frontend camera state recorded: {state}"
+
     @llm.register_function(description="Clear the currently selected merchandise image.")
     async def clear_merchandise() -> str:
         await nano_processor.clear_merchandise()
@@ -78,11 +94,46 @@ async def create_agent(**kwargs) -> Agent:
 async def join_call(agent: Agent, call_type: str, call_id: str, **kwargs) -> None:
     call = await agent.create_call(call_type, call_id)
 
+    nano_processor = None
     for processor in getattr(agent, "processors", []):
         if hasattr(processor, "attach_call"):
             processor.attach_call(call)
+        if isinstance(processor, NanoBananaProcessor):
+            nano_processor = processor
 
     async with agent.join(call):
+        async def handle_custom_event(event: dict) -> None:
+            if not nano_processor:
+                return
+            event_type = event.get("type")
+            payload = event.get("payload", {}) or {}
+
+            if event_type == "set_merchandise":
+                image_url = payload.get("image_url")
+                item_id = payload.get("item_id")
+                pose_image_url = payload.get("pose_image_url")
+
+                if isinstance(image_url, str) and image_url.strip():
+                    await nano_processor.set_merchandise(image_url)
+
+                    if isinstance(pose_image_url, str) and pose_image_url.strip():
+                        await nano_processor.set_pose_image(pose_image_url)
+
+                    result = await nano_processor.generate_tryon()
+                    result["item_id"] = item_id
+                    await nano_processor.emit_result(result)
+
+            elif event_type == "camera_state":
+                # Reserved for future frame/camera gating logic.
+                _ = payload.get("is_camera_active")
+
+        try:
+            maybe_coro = call.on("custom", handle_custom_event)
+            # Some SDKs return unsubscribe functions; keep best-effort behavior.
+            _ = maybe_coro
+        except Exception:
+            pass
+
         await agent.simple_response(
             "Hi! I can help with virtual try-on. Provide the merchandise image URL/path and the captured pose image URL/path, then ask me to generate the try-on."
         )

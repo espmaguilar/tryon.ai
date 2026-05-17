@@ -5,9 +5,9 @@ from vision_agents.plugins import getstream, gemini, ultralytics
 
 load_dotenv()
 
-# Use SERPER_API_KEY from .env as the primary key source for runtime integrations.
-if os.getenv("SERPER_API_KEY") and not os.getenv("GOOGLE_API_KEY"):
-    os.environ["GOOGLE_API_KEY"] = os.getenv("SERPER_API_KEY", "")
+# Use serper_API from .env as the primary key source for runtime integrations.
+if os.getenv("serper_API") and not os.getenv("GOOGLE_API_KEY"):
+    os.environ["GOOGLE_API_KEY"] = os.getenv("serper_API", "")
 
 
 async def create_agent(**kwargs) -> Agent:
