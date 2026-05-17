@@ -1,0 +1,14 @@
+[project]
+name = "tryout-agent"
+version = "0.1.0"
+description = "Vision Agents voice assistant example"
+requires-python = ">=3.12,<4.0"
+dependencies = [
+    "vision-agents[decart,gemini,getstream]",
+    "python-dotenv",
+    "google-genai",
+    "pillow",
+]
+
+[project.urls]
+"Homepage" = "https://visionagents.ai"

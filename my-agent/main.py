@@ -3,6 +3,7 @@ import importlib.util
 import os
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 from vision_agents.core import Agent, AgentLauncher, Runner, User
@@ -37,34 +38,39 @@ def _load_style_finder_module():
     return module
 
 
-def _resolve_product_url(item_name: str) -> str:
+def _build_generic_product_url(item_name: str) -> str:
     normalized_name = item_name.strip()
     if not normalized_name:
-        return ""
+        return "https://www.google.com/search?q=clothing+product"
+    return f"https://www.google.com/search?q={quote_plus(normalized_name + ' clothing product')}"
+
+
+def _resolve_product_url(item_name: str) -> tuple[str, str]:
+    normalized_name = item_name.strip()
+    if not normalized_name:
+        return _build_generic_product_url(""), "generic"
 
     module = _load_style_finder_module()
-    if module is None:
-        return ""
-
     api_key = os.getenv("serper_API", "").strip()
-    if not api_key:
-        return ""
 
-    try:
-        output_url, _, _, _ = module.find_product_url_with_backplan(
-            normalized_name,
-            api_key,
-            module.DEFAULT_LIMIT,
-            module.MAX_BACKPLAN_ATTEMPTS,
-        )
-    except Exception:
-        return ""
+    if module is not None and api_key:
+        try:
+            output_url, _, _, _ = module.find_product_url_with_backplan(
+                normalized_name,
+                api_key,
+                module.DEFAULT_LIMIT,
+                module.MAX_BACKPLAN_ATTEMPTS,
+            )
+            if isinstance(output_url, str) and output_url.strip():
+                return output_url.strip(), "style_finder"
+        except Exception:
+            pass
 
-    return output_url.strip() if isinstance(output_url, str) else ""
+    return _build_generic_product_url(normalized_name), "generic"
 
 
 async def create_agent(**kwargs) -> Agent:
-    llm = gemini.Realtime(fps=3)
+    llm = gemini.Realtime(fps=3, model="gemini-3.1-flash-live-preview")
 
     nano_processor = NanoBananaProcessor(
         api_key=os.getenv("GOOGLE_API_KEY"),
@@ -110,10 +116,13 @@ async def create_agent(**kwargs) -> Agent:
         await nano_processor.set_merchandise(merchandise_source)
         result = await nano_processor.generate_tryon()
         result["item_id"] = item_id
+        product_url, product_url_source = await asyncio.to_thread(_resolve_product_url, item_id)
+        result["product_url"] = product_url
+        result["product_url_source"] = product_url_source
         await nano_processor.emit_result(result)
         return (
             f"Applied item_id={item_id}, status={result.get('status')}, "
-            f"image_url={result.get('image_url')}"
+            f"image_url={result.get('image_url')}, product_url_source={product_url_source}"
         )
 
     @llm.register_function(description="Update camera active state from frontend.")
@@ -131,13 +140,49 @@ async def create_agent(**kwargs) -> Agent:
         await nano_processor.clear_pose_image()
         return "Pose image cleared."
 
+    @llm.register_function(
+        description="Search the web for a clothing item and return a direct image URL of the product."
+    )
+    async def search_clothing_image_url(item_name: str) -> str:
+        api_key = os.getenv("serper_API")
+        if not api_key: return "Serper API key not found."
+        import requests
+        headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
+        payload = {"q": f"{item_name} clothing isolated white background"}
+        try:
+            resp = await asyncio.to_thread(requests.post, "https://google.serper.dev/images", headers=headers, json=payload, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            images = data.get("images", [])
+            if images:
+                return images[0].get("imageUrl")
+        except Exception as e:
+            return f"Image search failed: {e}"
+        return "No image found."
+
+    @llm.register_function(
+        description="Send a merchandise image URL to the Unified Agent so they can use it for try-on."
+    )
+    async def send_merchandise_image_to_unified_agent(image_url: str) -> str:
+        payload = {"event": "receive_merchandise_image", "image_url": image_url}
+        if nano_processor.call:
+            try:
+                maybe_coro = nano_processor.call.send_custom_event("receive_merchandise_image", payload)
+                if asyncio.iscoroutine(maybe_coro):
+                    await maybe_coro
+            except Exception:
+                pass
+        return "Image sent to Unified Agent."
+
     return Agent(
         edge=getstream.Edge(),
-        agent_user=User(name="Assistant", id="agent"),
+        agent_user=User(name="MyAgentAssistant", id="my-agent"),
         instructions=(
-            "You are a virtual mirror assistant. Help the user try on merchandise. "
-            "Use set_merchandise to choose an item, set_pose_image with the captured customer pose image, "
-            "then use try_on_current_item to generate a mirror try-on result."
+            "You are a virtual mirror assistant that works alongside a Unified Agent. "
+            "Your ONLY job is to find clothing items and provide the image to the Unified Agent. "
+            "DO NOT ask the user for images. The Unified Agent handles the user's pose and try-on logic. "
+            "When the Unified Agent asks you to search for a clothing item, use search_clothing_image_url to find the direct image URL. "
+            "Then, IMMEDIATELY use send_merchandise_image_to_unified_agent to send the image URL to them, and verbally tell them you found it."
         ),
         llm=llm,
         processors=[nano_processor],
@@ -175,8 +220,12 @@ async def join_call(agent: Agent, call_type: str, call_id: str, **kwargs) -> Non
                     image_source = payload_image_url.strip()
 
                 product_url = payload_product_url.strip() if isinstance(payload_product_url, str) else ""
-                if not product_url and isinstance(item_name, str) and item_name.strip():
-                    product_url = await asyncio.to_thread(_resolve_product_url, item_name)
+                product_url_source = "provided" if product_url else ""
+                if not product_url:
+                    item_name_value = item_name if isinstance(item_name, str) else ""
+                    product_url, product_url_source = await asyncio.to_thread(
+                        _resolve_product_url, item_name_value
+                    )
 
                 if image_source:
                     await nano_processor.set_merchandise(image_source)
@@ -187,6 +236,7 @@ async def join_call(agent: Agent, call_type: str, call_id: str, **kwargs) -> Non
                     result = await nano_processor.generate_tryon()
                     result["item_id"] = item_id
                     result["product_url"] = product_url
+                    result["product_url_source"] = product_url_source
                     await nano_processor.emit_result(result)
 
             elif event_type == "set_pose_image":
@@ -215,7 +265,7 @@ async def join_call(agent: Agent, call_type: str, call_id: str, **kwargs) -> Non
             pass
 
         await agent.simple_response(
-            "Hi! I can help with virtual try-on. Provide the merchandise image URL/path and the captured pose image URL/path, then ask me to generate the try-on."
+            "Hi! I am the Assistant. I am ready to search for clothing item images whenever the Unified Agent asks me to."
         )
         await agent.finish()
 

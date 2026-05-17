@@ -214,7 +214,7 @@ def extract_shopping_results(payload: dict) -> list[dict[str, str]]:
 
 
 def resolve_shopping_to_product_url(
-    shopping_payload: dict, api_key: str, limit: int
+    shopping_payload: dict, serper_api_key: str, limit: int, google_api_key: str = ""
 ) -> tuple[str, list[dict[str, str]]]:
     for item in shopping_payload.get("shopping", [])[:5]:
         title = item.get("title")
@@ -229,12 +229,12 @@ def resolve_shopping_to_product_url(
         query = " ".join(query_parts)
 
         try:
-            payload = search_serper(query, api_key, num_results=max(limit, 10))
+            payload = search_serper(query, serper_api_key, num_results=max(limit, 10))
         except Exception:
             continue
 
         results = extract_results(payload)
-        output_url = select_output_url(results)
+        output_url = select_output_url(results, google_api_key)
         if output_url:
             return output_url, results
 
@@ -307,13 +307,33 @@ def is_likely_product_url(url: str) -> bool:
     return False
 
 
-def select_output_url(results: Iterable[dict[str, str]]) -> str:
+def select_output_url(results: Iterable[dict[str, str]], google_api_key: str = "") -> str:
     global URL
     result_list = list(results)
     if not result_list:
         URL = ""
         return URL
 
+    # Use AI call to select URL if API key is provided
+    if google_api_key:
+        import requests
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={google_api_key}"
+        prompt = "You are a shopping assistant. I have a list of search results. Return ONLY the best product URL to buy the clothing item described in the snippets. Return the raw URL string, nothing else. Do not use markdown formatting. Results:\n"
+        for r in result_list:
+            prompt += f"URL: {r['url']} | Title: {r['title']} | Snippet: {r['snippet']}\n"
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+        try:
+            response = requests.post(api_url, json=payload, timeout=10)
+            data = response.json()
+            if "candidates" in data and len(data["candidates"]) > 0:
+                text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if text.startswith("http"):
+                    URL = text
+                    return URL
+        except Exception:
+            pass
+
+    # Fallback to heuristics
     for result in result_list:
         if is_likely_product_url(result["url"]):
             URL = result["url"]
@@ -332,7 +352,7 @@ def build_backplan(style: str, max_attempts: int) -> list[tuple[str, str]]:
 
 
 def find_product_url_with_backplan(
-    style: str, api_key: str, limit: int, max_attempts: int
+    style: str, serper_api_key: str, limit: int, max_attempts: int, google_api_key: str = ""
 ) -> tuple[str, list[dict[str, str]], int, list[str]]:
     attempts = 0
     errors: list[str] = []
@@ -343,7 +363,7 @@ def find_product_url_with_backplan(
         try:
             payload = search_serper(
                 query,
-                api_key,
+                serper_api_key,
                 num_results=max(limit + 10, DEFAULT_RESULT_COUNT),
                 endpoint=endpoint,
             )
@@ -359,12 +379,12 @@ def find_product_url_with_backplan(
         if attempt_results:
             latest_results = attempt_results
 
-        output_url = select_output_url(attempt_results)
+        output_url = select_output_url(attempt_results, google_api_key)
         if output_url:
             return output_url, latest_results, attempts, errors
 
         if endpoint == SERPER_SHOPPING_API_URL:
-            resolved_url, resolved_results = resolve_shopping_to_product_url(payload, api_key, limit)
+            resolved_url, resolved_results = resolve_shopping_to_product_url(payload, serper_api_key, limit, google_api_key)
             if resolved_results:
                 latest_results = resolved_results
             if resolved_url:
@@ -417,8 +437,9 @@ def main() -> int:
     dotenv_path = Path(__file__).resolve().parent / ".env"
     load_dotenv(dotenv_path=dotenv_path, override=False)
 
-    api_key = os.getenv("serper_API")
-    if not api_key:
+    serper_api_key = os.getenv("serper_API")
+    google_api_key = os.getenv("GOOGLE_API_KEY", "")
+    if not serper_api_key:
         print(
             "Error: serper_API is not set. Add it to style-finder/.env.",
             file=sys.stderr,
@@ -426,7 +447,7 @@ def main() -> int:
         return 2
 
     output_url, results, attempts, errors = find_product_url_with_backplan(
-        style, api_key, limit, max_attempts
+        style, serper_api_key, limit, max_attempts, google_api_key
     )
 
     if args.json:

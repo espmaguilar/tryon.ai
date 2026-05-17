@@ -68,15 +68,58 @@ body,
   display: flex;
   align-items: stretch;
   justify-content: stretch;
+  /* Stacking context for layers inside */
+  isolation: isolate;
 }
 
+/* Layer 1 – base video source (local camera fallback or static image) */
 .camera-feed {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
-  flex: 1 1 auto;
   display: block;
   object-fit: cover;
   transform: scaleX(-1);
+  z-index: 1;
+}
+
+/* Layer 1 – GetStream SDK ParticipantView used as mirror base */
+.stream-participant-view {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  z-index: 1;
+  /* ParticipantView renders its own <video> child; ensure it fills the frame */
+}
+
+/* The SDK places a <video> inside ParticipantView; we need it to fill the wrapper */
+.stream-participant-view video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  display: block !important;
+  /* Mirror the local participant to feel like a real mirror */
+  transform: scaleX(-1) !important;
+}
+
+/* Layer 2 – AI-generated try-on result overlay */
+.tryon-overlay-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.88;
+  pointer-events: none;
+  z-index: 2;
+  animation: fadeInOverlay 0.4s ease;
+}
+
+@keyframes fadeInOverlay {
+  from { opacity: 0; }
+  to   { opacity: 0.88; }
 }
 
 .camera-placeholder {
@@ -98,7 +141,7 @@ body,
   letter-spacing: 0.02em;
 }
 
-/* Sci-Fi HUD Overlay */
+/* Layer 3 – Sci-Fi HUD Overlay */
 .mirror-overlay {
   position: absolute;
   inset: 0;
@@ -107,6 +150,7 @@ body,
   justify-content: space-between;
   padding: 32px;
   pointer-events: none;
+  z-index: 3;
 }
 
 /* Glowing Dynamic Laser Scan Line */
@@ -399,6 +443,66 @@ body,
   font-weight: 700;
   font-size: 0.95rem;
   color: #38bdf8;
+}
+
+/* ── HUD text helpers ─────────────────────────────────────────── */
+.hud-text {
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  pointer-events: auto;
+}
+
+.hud-text--voice {
+  color: #93c5fd;
+}
+
+.hud-text--error {
+  font-size: 0.9rem;
+  color: #fca5a5;
+}
+
+.hud-link {
+  color: #93c5fd;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.hud-link:hover {
+  color: #bfdbfe;
+  text-decoration: underline;
+}
+
+/* ── Stream status badge ──────────────────────────────────────── */
+.stream-status-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  padding: 2px 8px;
+  border-radius: 9999px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+/* ── Stream SDK default UI reset ──────────────────────────────── */
+/* Suppress the SDK's built-in call UI chrome (labels, mute indicators, etc.) */
+.str-video__participant-details,
+.str-video__participant-box--speaking-indicator,
+.str-video__menu-toggle,
+.str-video__call-controls {
+  display: none !important;
+}
+
+/* Ensure the SDK wrapper div created by ParticipantView fills its container */
+.str-video__participant-view {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
 }
 
 /* Subtle focus indicators for accessibility */

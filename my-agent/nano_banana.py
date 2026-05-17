@@ -109,6 +109,7 @@ class NanoBananaProcessor:
             "status": result.get("status", "unknown"),
             "image_url": result.get("image_url"),
             "product_url": result.get("product_url"),
+            "product_url_source": result.get("product_url_source"),
             "source_image_url": self.merchandise_image,
             "latency_ms": result.get("latency_ms"),
             "reason": result.get("reason"),
@@ -171,9 +172,16 @@ class NanoBananaProcessor:
             return raw
 
         if self._is_url(normalized):
-            raise ValueError(
-                "Remote image URLs are disabled. Use a local file path or a data:image URL."
-            )
+            import requests
+            try:
+                resp = requests.get(normalized, timeout=15)
+                resp.raise_for_status()
+                raw = resp.content
+            except Exception as exc:
+                raise ValueError(f"Failed to download remote image from {normalized}: {exc}")
+            if not self._looks_like_image_bytes(raw):
+                raise ValueError("Remote URL did not contain a supported image.")
+            return raw
 
         raw = Path(normalized).read_bytes()
         if not self._looks_like_image_bytes(raw):
