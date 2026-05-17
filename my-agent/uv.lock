@@ -1031,12 +1031,16 @@ name = "my-agent"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "google-genai" },
+    { name = "pillow" },
     { name = "python-dotenv" },
     { name = "vision-agents", extra = ["decart", "gemini", "getstream"] },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "google-genai" },
+    { name = "pillow" },
     { name = "python-dotenv" },
     { name = "vision-agents", extras = ["decart", "gemini", "getstream"] },
 ]

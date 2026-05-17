@@ -2,6 +2,7 @@ import asyncio
 import base64
 import io
 import time
+import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
@@ -136,6 +137,93 @@ class NanoBananaProcessor:
                 return response.read()
         return Path(source).read_bytes()
 
+    @staticmethod
+    def _format_source_fetch_error(
+        source_label: str,
+        source_value: str,
+        exc: Exception,
+    ) -> dict[str, str]:
+        if isinstance(exc, urllib.error.HTTPError):
+            hint = ""
+            if exc.code == 403:
+                hint = " Source URL is blocked (403). Use a local file path or publicly accessible URL."
+            return {
+                "status": "error",
+                "reason": f"{source_label}_fetch_failed",
+                "message": (
+                    f"Failed to fetch {source_label.replace('_', ' ')} from '{source_value}': "
+                    f"HTTP {exc.code} {exc.reason}.{hint}"
+                ),
+            }
+
+        if isinstance(exc, urllib.error.URLError):
+            return {
+                "status": "error",
+                "reason": f"{source_label}_fetch_failed",
+                "message": (
+                    f"Failed to fetch {source_label.replace('_', ' ')} from '{source_value}': "
+                    f"{exc.reason}"
+                ),
+            }
+
+        if isinstance(exc, FileNotFoundError):
+            return {
+                "status": "error",
+                "reason": f"{source_label}_fetch_failed",
+                "message": (
+                    f"Failed to read {source_label.replace('_', ' ')} at '{source_value}': "
+                    "file not found."
+                ),
+            }
+
+        return {
+            "status": "error",
+            "reason": f"{source_label}_fetch_failed",
+            "message": f"Failed to fetch {source_label.replace('_', ' ')}: {exc}",
+        }
+
+    def _classify_model_error(self, exc: Exception) -> dict[str, str]:
+        text = str(exc)
+        lower_text = text.lower()
+        status_code = getattr(exc, "status_code", None)
+
+        if status_code == 429 or "resource_exhausted" in lower_text or "quota exceeded" in lower_text:
+            return {
+                "status": "error",
+                "reason": "model_quota_exhausted",
+                "message": (
+                    "Model quota exceeded. Check billing/quota limits and retry. "
+                    f"Details: {text}"
+                ),
+            }
+
+        if status_code == 403 or "forbidden" in lower_text or "permission denied" in lower_text:
+            return {
+                "status": "error",
+                "reason": "model_access_forbidden",
+                "message": (
+                    "Model access is forbidden for this API key/project. "
+                    "Verify model entitlement and API permissions. "
+                    f"Details: {text}"
+                ),
+            }
+
+        if "invalid argument" in lower_text or "not found" in lower_text or "unsupported" in lower_text:
+            return {
+                "status": "error",
+                "reason": "invalid_model_or_request",
+                "message": (
+                    f"Invalid model/request for '{self.model}'. "
+                    f"Details: {text}"
+                ),
+            }
+
+        return {
+            "status": "error",
+            "reason": "tryon_generation_failed",
+            "message": f"Try-on generation failed: {text}",
+        }
+
     def _image_bytes_from_frame(self, frame: Any) -> bytes:
         if isinstance(frame, (bytes, bytearray, memoryview)):
             return bytes(frame)
@@ -195,30 +283,47 @@ class NanoBananaProcessor:
                 "message": "GOOGLE_API_KEY is not set.",
             }
 
-        try:
-            if self.pose_image is not None:
-                pose_source = self.pose_image
+        if self.pose_image is not None:
+            pose_source = self.pose_image
+            try:
                 base_image_bytes = await asyncio.to_thread(
                     self._read_image_bytes_from_path_or_url, self.pose_image
                 )
-            else:
-                pose_source = "latest_frame"
+            except Exception as exc:
+                return self._format_source_fetch_error("pose_image", self.pose_image, exc)
+        else:
+            pose_source = "latest_frame"
+            try:
                 base_image_bytes = await asyncio.to_thread(
                     self._image_bytes_from_frame, self.latest_frame
                 )
+            except Exception as exc:
+                return {
+                    "status": "error",
+                    "reason": "pose_image_fetch_failed",
+                    "message": f"Failed to convert latest frame into image bytes: {exc}",
+                }
 
+        try:
             garment_image_bytes = await asyncio.to_thread(
                 self._read_image_bytes_from_path_or_url, self.merchandise_image
             )
-
-            prompt = (
-                "Virtual mirror try-on edit. Preserve the exact same person, face, pose, body proportions, camera "
-                "angle, lighting, and full background from image 1. Replace only the worn clothing on the person so "
-                "it matches the garment from image 2 with realistic fit and texture. Do not alter identity or scene. "
-                "Return one photorealistic edited image."
+        except Exception as exc:
+            return self._format_source_fetch_error(
+                "merchandise_image",
+                self.merchandise_image,
+                exc,
             )
 
-            client = genai.Client(api_key=self.api_key)
+        prompt = (
+            "Virtual mirror try-on edit. Preserve the exact same person, face, pose, body proportions, camera "
+            "angle, lighting, and full background from image 1. Replace only the worn clothing on the person so "
+            "it matches the garment from image 2 with realistic fit and texture. Do not alter identity or scene. "
+            "Return one photorealistic edited image."
+        )
+
+        client = genai.Client(api_key=self.api_key)
+        try:
             response = await asyncio.to_thread(
                 client.models.generate_content,
                 model=self.model,
@@ -228,26 +333,22 @@ class NanoBananaProcessor:
                     types.Part.from_bytes(data=garment_image_bytes, mime_type="image/png"),
                 ],
             )
-
-            image_bytes = self._extract_inline_image_bytes(response)
-            if not image_bytes:
-                return {
-                    "status": "error",
-                    "reason": "no_image_in_model_response",
-                    "message": "Model response did not include an edited image.",
-                }
-
-            output_file = self.output_dir / f"tryon_{job_id}.png"
-            output_file.write_bytes(image_bytes)
-
-            return {
-                "status": "success",
-                "image_url": str(output_file),
-                "message": f"Try-on image generated from {pose_source}.",
-            }
         except Exception as exc:
+            return self._classify_model_error(exc)
+
+        image_bytes = self._extract_inline_image_bytes(response)
+        if not image_bytes:
             return {
                 "status": "error",
-                "reason": "tryon_generation_failed",
-                "message": f"Try-on generation failed: {exc}",
+                "reason": "no_image_in_model_response",
+                "message": "Model response did not include an edited image.",
             }
+
+        output_file = self.output_dir / f"tryon_{job_id}.png"
+        output_file.write_bytes(image_bytes)
+
+        return {
+            "status": "success",
+            "image_url": str(output_file),
+            "message": f"Try-on image generated from {pose_source}.",
+        }
