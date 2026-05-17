@@ -2,14 +2,12 @@ import asyncio
 import base64
 import io
 import time
-import urllib.error
-import urllib.parse
-import urllib.error
-import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
 
+from google import genai
+from google.genai import types
 from PIL import Image
 
 
@@ -41,6 +39,10 @@ class NanoBananaProcessor:
         self.latest_frame: Any | None = None
 
         self._inflight_lock = asyncio.Lock()
+
+    def attach_agent(self, agent: Any) -> None:
+        # Compatibility hook expected by vision-agents Agent.
+        _ = agent
 
     def attach_call(self, call: Any) -> None:
         self.call = call
@@ -106,6 +108,7 @@ class NanoBananaProcessor:
             "item_id": result.get("item_id"),
             "status": result.get("status", "unknown"),
             "image_url": result.get("image_url"),
+            "product_url": result.get("product_url"),
             "source_image_url": self.merchandise_image,
             "latency_ms": result.get("latency_ms"),
             "reason": result.get("reason"),
@@ -152,22 +155,30 @@ class NanoBananaProcessor:
         return False
 
     def _read_image_bytes_from_path_or_url(self, source: str) -> bytes:
-        source = source.strip()
+        normalized = source.strip()
 
-        if source.startswith("data:image/"):
-            header, encoded = source.split(",", 1)
-            if ";base64" in header:
-                raw = base64.b64decode(encoded, validate=False)
-            else:
-                raw = urllib.parse.unquote_to_bytes(encoded)
+        if normalized.startswith("data:image/"):
+            try:
+                _, payload = normalized.split(",", 1)
+            except ValueError as exc:
+                raise ValueError("Invalid data URL image source.") from exc
+            try:
+                raw = base64.b64decode(payload, validate=False)
+            except Exception as exc:
+                raise ValueError("Invalid base64 image data in data URL source.") from exc
             if not self._looks_like_image_bytes(raw):
                 raise ValueError("Data URL did not contain a valid image payload.")
             return raw
 
-        if self._is_url(source):
-            with urllib.request.urlopen(source, timeout=20) as response:
-                return response.read()
-        return Path(source).read_bytes()
+        if self._is_url(normalized):
+            raise ValueError(
+                "Remote image URLs are disabled. Use a local file path or a data:image URL."
+            )
+
+        raw = Path(normalized).read_bytes()
+        if not self._looks_like_image_bytes(raw):
+            raise ValueError("Local file does not appear to be a supported image.")
+        return raw
 
     @staticmethod
     def _format_source_fetch_error(
@@ -175,29 +186,6 @@ class NanoBananaProcessor:
         source_value: str,
         exc: Exception,
     ) -> dict[str, str]:
-        if isinstance(exc, urllib.error.HTTPError):
-            hint = ""
-            if exc.code == 403:
-                hint = " Source URL is blocked (403). Use a local file path or publicly accessible URL."
-            return {
-                "status": "error",
-                "reason": f"{source_label}_fetch_failed",
-                "message": (
-                    f"Failed to fetch {source_label.replace('_', ' ')} from '{source_value}': "
-                    f"HTTP {exc.code} {exc.reason}.{hint}"
-                ),
-            }
-
-        if isinstance(exc, urllib.error.URLError):
-            return {
-                "status": "error",
-                "reason": f"{source_label}_fetch_failed",
-                "message": (
-                    f"Failed to fetch {source_label.replace('_', ' ')} from '{source_value}': "
-                    f"{exc.reason}"
-                ),
-            }
-
         if isinstance(exc, FileNotFoundError):
             return {
                 "status": "error",

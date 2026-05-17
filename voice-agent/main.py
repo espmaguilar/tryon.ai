@@ -1,5 +1,6 @@
 import asyncio
 import io
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,12 +21,25 @@ CAPTURES_DIR = base_dir / "captures"
 CAPTURES_DIR.mkdir(exist_ok=True)
 
 
+def speak_back(text: str) -> None:
+    if not text.strip():
+        return
+    try:
+        subprocess.run(["say", text], check=False)
+    except Exception as exc:
+        print(f"[VoiceAgent] TTS failed: {exc}")
+
+
 class _FrameCaptureProcessor:
     """Pass-through processor that caches the latest video frame for on-demand snapshots."""
 
     def __init__(self) -> None:
         self.latest_frame: Any | None = None
         self.call: Any | None = None
+
+    def attach_agent(self, agent: Any) -> None:
+        # Compatibility hook expected by vision-agents Agent.
+        _ = agent
 
     def attach_call(self, call: Any) -> None:
         self.call = call
@@ -83,20 +97,23 @@ async def create_agent(**_) -> Agent:
     frame_capture = _FrameCaptureProcessor()
 
     async def take_photo() -> str:
-        await asyncio.sleep(1)
-        await asyncio.sleep(1)
-        await asyncio.sleep(1)
+        # Countdown + capture
+        for count in ("3", "2", "1"):
+            speak_back(count)
+            await asyncio.sleep(1)
 
         out_path = frame_capture.save_snapshot()
         if out_path is None:
             return "No video frame available — make sure the camera is on."
 
         await frame_capture.emit_capture_event(out_path)
+        speak_back("Photo captured.")
         print(f"\n[VoiceAgent] Photo captured: {out_path}\n")
         return f"Photo captured: {out_path.name}"
 
     async def save_prompt(prompt: str) -> str:
         SAVED_PROMPT_FILE.write_text(prompt, encoding="utf-8")
+        speak_back("Prompt saved.")
         print(f"\n[VoiceAgent] Prompt saved: {prompt}\n")
         return "Prompt saved."
 
@@ -145,6 +162,25 @@ async def join_call(agent: Agent, call_type: str, call_id: str, **_) -> None:
             processor.attach_call(call)
 
     async with agent.join(call):
+        async def handle_custom_event(event: dict) -> None:
+            event_type = event.get("type")
+            payload = event.get("payload", {}) or {}
+
+            if event_type == "voice_control":
+                action = payload.get("action")
+                if action == "start_transcription":
+                    await agent.simple_response(
+                        "Voice mode started. Say I'm ready to capture a photo, then dictate your prompt."
+                    )
+                elif action == "stop_transcription":
+                    await agent.simple_response("Voice mode stopped.")
+
+        try:
+            maybe_coro = call.on("custom", handle_custom_event)
+            _ = maybe_coro
+        except Exception:
+            pass
+
         await agent.simple_response(
             "Ready. Say 'I'm ready' for a photo countdown, "
             "or dictate a prompt and say 'save that' when done."

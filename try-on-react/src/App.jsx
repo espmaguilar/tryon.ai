@@ -10,6 +10,7 @@ const CLOSET_ITEMS = [
     price: '$89.00',
     emoji: '🧥',
     imageUrl: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab',
+    productUrl: '',
   },
   {
     id: 't2',
@@ -18,6 +19,7 @@ const CLOSET_ITEMS = [
     price: '$65.00',
     emoji: '🧥',
     imageUrl: 'https://images.unsplash.com/photo-1541099649105-f69ad21f3246',
+    productUrl: '',
   },
   {
     id: 't3',
@@ -26,6 +28,7 @@ const CLOSET_ITEMS = [
     price: '$45.00',
     emoji: '👕',
     imageUrl: 'https://images.unsplash.com/photo-1596755094514-f87e34085b2c',
+    productUrl: '',
   },
   {
     id: 't4',
@@ -34,6 +37,7 @@ const CLOSET_ITEMS = [
     price: '$28.00',
     emoji: '👕',
     imageUrl: 'https://images.unsplash.com/photo-1527719327859-c6ce80353573',
+    productUrl: '',
   },
 ];
 
@@ -42,11 +46,6 @@ const RECOMMENDATIONS = [
   { id: 'r2', name: 'Techwear Boots', category: 'Match - 92%', price: '$120.00', emoji: '🥾' },
   { id: 'r3', name: 'Silver Chain Set', category: 'Match - 85%', price: '$19.00', emoji: '⛓️' },
 ];
-
-const isLikelyImageUrl = (value) =>
-  typeof value === 'string' &&
-  /^https?:\/\//i.test(value) &&
-  !/\.html?($|\?)/i.test(value);
 
 const toCameraErrorMessage = (err) => {
   const code = err?.name || 'UnknownError';
@@ -65,34 +64,35 @@ const toCameraErrorMessage = (err) => {
 export default function App() {
   const [activeTab, setActiveTab] = useState('closet');
   const [selectedItem, setSelectedItem] = useState(null);
-  const [isMirrorActive, setIsMirrorActive] = useState(false);
+  const [isCameraActive, setIsCameraActive] = useState(false);
   const [processedImageUrl, setProcessedImageUrl] = useState('');
-  const [showResultOverlay, setShowResultOverlay] = useState(true);
+  const [productUrl, setProductUrl] = useState('');
+  const [, setSyncStatus] = useState('DISCONNECTED');
+  const [voiceTranscript, setVoiceTranscript] = useState('');
   const [cameraError, setCameraError] = useState('');
-  const [manualPoseImageUrl, setManualPoseImageUrl] = useState('');
+  const baseImagePath = (import.meta.env.VITE_BASE_IMAGE_PATH || '').trim();
   const videoRef = useRef(null);
   const streamRef = useRef(null);
-  const fileInputRef = useRef(null);
-  const publishedTrackTypeRef = useRef('');
+  const streamListenerReadyRef = useRef(false);
 
   const sendAgentEvent = useCallback((type, payload) => {
     const streamCall = window.streamCall;
     if (streamCall && typeof streamCall.sendCustomEvent === 'function') {
       streamCall.sendCustomEvent({ type, payload });
+      setSyncStatus('SYNCED');
+      return;
     }
+
+    // Fallback bridge for local testing without Stream SDK wiring in this app.
+    window.dispatchEvent(
+      new CustomEvent('agent_custom_event', {
+        detail: { type, payload },
+      }),
+    );
+    setSyncStatus('LOCAL_BRIDGE');
   }, []);
 
   const stopCamera = useCallback(() => {
-    const streamCall = window.streamCall;
-    const publishedTrackType = publishedTrackTypeRef.current;
-    if (streamCall && typeof streamCall.stopPublish === 'function' && publishedTrackType) {
-      streamCall.stopPublish(publishedTrackType).catch(() => {
-        // Best-effort cleanup to avoid blocking camera shutdown.
-      });
-    }
-
-    publishedTrackTypeRef.current = '';
-
     const currentStream = streamRef.current || videoRef.current?.srcObject;
     const tracks = currentStream?.getTracks?.() || [];
     tracks.forEach((track) => track.stop());
@@ -102,12 +102,14 @@ export default function App() {
       videoRef.current.srcObject = null;
     }
 
-    setIsMirrorActive(false);
-  }, []);
+    setIsCameraActive(false);
+    sendAgentEvent('camera_state', { is_camera_active: false });
+    sendAgentEvent('voice_control', { action: 'stop_transcription', source: 'mirror_power_down' });
+  }, [sendAgentEvent]);
 
   const startCamera = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
-      setCameraError('Live camera is not supported here. Use Take Photo instead.');
+      setCameraError('Live camera is not supported in this browser.');
       return;
     }
 
@@ -128,116 +130,45 @@ export default function App() {
         videoRef.current.muted = true;
         try {
           await videoRef.current.play();
-        } catch (playErr) {
-          console.error('Video playback failed:', playErr);
-          setCameraError('Camera stream started, but playback was blocked by the browser.');
+        } catch {
+          // Best effort only; browsers may still autoplay once user interacts.
         }
       }
 
-      const streamCall = window.streamCall;
-      if (streamCall && typeof streamCall.publish === 'function') {
-        try {
-          await streamCall.publish(stream, 'video')
-          publishedTrackTypeRef.current = 'video'
-        } catch (publishErr) {
-          console.error('GetStream publish failed:', publishErr);
-          setCameraError('Camera is active, but publishing to Stream failed.');
-        }
-      }
-
-      setShowResultOverlay(false);
+      setIsCameraActive(true);
       setCameraError('');
-      setIsMirrorActive(true);
+      sendAgentEvent('camera_state', { is_camera_active: true });
+      sendAgentEvent('voice_control', { action: 'start_transcription', source: 'mirror_initialize' });
     } catch (err) {
       console.error('Error accessing camera:', err);
       setCameraError(toCameraErrorMessage(err));
       stopCamera();
     }
-  }, [stopCamera]);
+  }, [sendAgentEvent, stopCamera]);
 
   const toggleCamera = useCallback(async () => {
-    if (isMirrorActive) {
+    if (isCameraActive) {
       stopCamera();
       return;
     }
+
     await startCamera();
-  }, [isMirrorActive, startCamera, stopCamera]);
+  }, [isCameraActive, startCamera, stopCamera]);
 
   useEffect(() => {
-    sendAgentEvent('camera_state', { is_camera_active: isMirrorActive });
-  }, [isMirrorActive, sendAgentEvent]);
-
-  useEffect(() => {
-    const mirrorUpdateHandler = (event) => {
-      const detail = event?.detail || {};
-      const payload = detail?.payload || detail || {};
-      const imageUrl = payload?.image_url;
-      if (typeof imageUrl === 'string' && imageUrl.trim()) {
-        setProcessedImageUrl(imageUrl);
-        setShowResultOverlay(true);
-      }
-    };
-
-    const streamCustomHandler = (event) => {
-      const eventType = event?.type || event?.custom?.type;
-      const payload = event?.payload || event?.custom?.payload || {};
-      if (eventType === 'mirror_update') {
-        mirrorUpdateHandler({ detail: payload });
-      }
-    };
-
-    window.addEventListener('mirror_update', mirrorUpdateHandler);
-
-    const streamCall = window.streamCall;
-    let unsubscribeStream = null;
-    if (streamCall && typeof streamCall.on === 'function') {
-      try {
-        const maybeUnsubscribe = streamCall.on('custom', streamCustomHandler);
-        if (typeof maybeUnsubscribe === 'function') {
-          unsubscribeStream = maybeUnsubscribe;
-        }
-      } catch {
-        // Best-effort listener setup; UI remains functional without subscription.
-      }
+    if (isCameraActive && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.muted = true;
+      videoRef.current.play().catch(() => {});
     }
-
-    return () => {
-      window.removeEventListener('mirror_update', mirrorUpdateHandler);
-      if (typeof unsubscribeStream === 'function') {
-        unsubscribeStream();
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isMirrorActive || !videoRef.current || !streamRef.current) return;
-    if (videoRef.current.srcObject === streamRef.current) return;
-
-    videoRef.current.srcObject = streamRef.current;
-    videoRef.current.muted = true;
-    videoRef.current.play().catch(() => {
-      // Playback errors are handled during start; keep this sync best-effort.
-    });
-  }, [isMirrorActive]);
-
-  useEffect(() => {
-    const previousBodyOverflowX = document.body.style.overflowX;
-    const previousBodyMargin = document.body.style.margin;
-    const previousHtmlOverflowX = document.documentElement.style.overflowX;
-
-    document.body.style.overflowX = 'hidden';
-    document.body.style.margin = '0';
-    document.documentElement.style.overflowX = 'hidden';
-
-    return () => {
-      stopCamera();
-      document.body.style.overflowX = previousBodyOverflowX;
-      document.body.style.margin = previousBodyMargin;
-      document.documentElement.style.overflowX = previousHtmlOverflowX;
-    };
-  }, [stopCamera]);
+  }, [isCameraActive]);
 
   const capturePoseDataUrl = useCallback(() => {
+    const baseImageUrl = baseImagePath.trim();
+    if (baseImageUrl) {
+      return baseImageUrl;
+    }
+
     const video = videoRef.current;
     if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
       return '';
@@ -252,68 +183,131 @@ export default function App() {
 
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL('image/png');
-  }, []);
-
-  const openPhotoPicker = useCallback(() => {
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-      fileInputRef.current.click();
-    }
-  }, []);
-
-  const handlePhotoFileChange = useCallback((event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
-      if (dataUrl.startsWith('data:image/')) {
-        setManualPoseImageUrl(dataUrl);
-        setCameraError('');
-      } else {
-        setCameraError('Selected file is not a valid image.');
-      }
-    };
-    reader.onerror = () => {
-      setCameraError('Could not read selected photo.');
-    };
-    reader.readAsDataURL(file);
-  }, []);
+  }, [baseImagePath]);
 
   const handleTakePhoto = useCallback(() => {
-    if (isMirrorActive) {
-      const captured = capturePoseDataUrl();
-      if (!captured) {
-        setCameraError('Could not capture photo from live camera.');
-        return;
-      }
-      setManualPoseImageUrl(captured);
-      return;
-    }
+    const captured = capturePoseDataUrl();
+    if (!captured) return '';
 
-    openPhotoPicker();
-  }, [capturePoseDataUrl, isMirrorActive, openPhotoPicker]);
+    sendAgentEvent('set_pose_image', { pose_image_url: captured });
+    return captured;
+  }, [capturePoseDataUrl, sendAgentEvent]);
 
   const handleCalibrate = useCallback(() => {
     if (!selectedItem) return;
-    if (!isLikelyImageUrl(selectedItem.imageUrl)) {
-      alert('Selected item does not have a valid direct image URL.');
-      return;
-    }
 
-    const livePoseImageUrl = capturePoseDataUrl();
-    const poseImageUrl = livePoseImageUrl || manualPoseImageUrl;
-
+    const poseImageUrl = capturePoseDataUrl();
     sendAgentEvent('set_merchandise', {
       item_id: selectedItem.id,
       image_url: selectedItem.imageUrl,
+      product_url: selectedItem.productUrl,
       item_name: selectedItem.name,
       pose_image_url: poseImageUrl,
     });
-  }, [capturePoseDataUrl, manualPoseImageUrl, selectedItem, sendAgentEvent]);
+  }, [capturePoseDataUrl, selectedItem, sendAgentEvent]);
 
-  const previewPoseUrl = manualPoseImageUrl || processedImageUrl;
+  useEffect(() => {
+    const handleIncomingEvent = (eventType, payload) => {
+      if (eventType === 'mirror_update') {
+        const imageUrl = payload?.image_url;
+        const incomingProductUrl = payload?.product_url;
+        if (typeof imageUrl === 'string' && imageUrl.trim()) {
+          setProcessedImageUrl(imageUrl);
+          setSyncStatus('SYNCED');
+        }
+        if (typeof incomingProductUrl === 'string' && incomingProductUrl.trim()) {
+          setProductUrl(incomingProductUrl.trim());
+        } else {
+          setProductUrl('');
+        }
+      }
+
+      if (eventType === 'voice_command') {
+        const transcript = payload?.transcript || payload?.text || payload?.message;
+        if (typeof transcript === 'string' && transcript.trim()) {
+          const normalized = transcript.trim().toLowerCase();
+          setVoiceTranscript(transcript.trim());
+          setSyncStatus('SYNCED');
+
+          if (normalized.includes('take photo') || normalized.includes('capture photo')) {
+            handleTakePhoto();
+          }
+
+          if (normalized.includes('calibrate') || normalized.includes('try on') || normalized.includes('try-on')) {
+            handleCalibrate();
+          }
+        }
+      }
+    };
+
+    const streamCustomHandler = (event) => {
+      const customData = event?.custom || {};
+      const eventType = customData?.type || event?.type;
+      const payload =
+        customData?.payload ||
+        customData?.custom ||
+        event?.payload ||
+        event?.custom?.payload ||
+        {};
+      handleIncomingEvent(eventType, payload);
+    };
+
+    const localBridgeHandler = (event) => {
+      const detail = event?.detail || {};
+      handleIncomingEvent(detail?.type, detail?.payload || {});
+    };
+
+    window.addEventListener('agent_custom_event', localBridgeHandler);
+
+    const attachStreamListener = () => {
+      const streamCall = window.streamCall;
+      if (!streamCall || typeof streamCall.on !== 'function') {
+        return null;
+      }
+
+      try {
+        const maybeUnsubscribe = streamCall.on('custom', streamCustomHandler);
+        if (typeof maybeUnsubscribe === 'function') {
+          streamListenerReadyRef.current = true;
+          return maybeUnsubscribe;
+        }
+      } catch {
+        // Best-effort listener setup for local UI continuity.
+      }
+
+      return null;
+    };
+
+    let unsubscribeStream = attachStreamListener();
+    let pollTimer = null;
+
+    if (!unsubscribeStream) {
+      pollTimer = window.setInterval(() => {
+        if (streamListenerReadyRef.current) return;
+        const maybeUnsubscribe = attachStreamListener();
+        if (maybeUnsubscribe) {
+          unsubscribeStream = maybeUnsubscribe;
+          if (pollTimer) {
+            window.clearInterval(pollTimer);
+          }
+        }
+      }, 500);
+    }
+
+    return () => {
+      window.removeEventListener('agent_custom_event', localBridgeHandler);
+      if (pollTimer) {
+        window.clearInterval(pollTimer);
+      }
+      if (typeof unsubscribeStream === 'function') {
+        unsubscribeStream();
+      }
+    };
+  }, [handleCalibrate, handleTakePhoto]);
+
+  useEffect(() => () => {
+    stopCamera();
+  }, [stopCamera]);
 
   return (
     <div className="app-container">
@@ -324,16 +318,10 @@ export default function App() {
         </header>
 
         <div className="mirror-view-wrapper">
-          {isMirrorActive ? (
+          {baseImagePath ? (
+            <img src={baseImagePath} alt="Base pose" className="camera-feed" />
+          ) : isCameraActive ? (
             <video ref={videoRef} autoPlay muted playsInline className="camera-feed" />
-          ) : previewPoseUrl ? (
-            <img
-              src={previewPoseUrl}
-              alt="Captured pose preview"
-              className="camera-feed"
-              onError={() => setManualPoseImageUrl('')}
-              style={{ pointerEvents: 'none' }}
-            />
           ) : (
             <div className="camera-placeholder">
               <span style={{ fontSize: '3rem' }}>🪞</span>
@@ -341,7 +329,7 @@ export default function App() {
             </div>
           )}
 
-          {processedImageUrl && showResultOverlay ? (
+          {processedImageUrl ? (
             <img
               src={processedImageUrl}
               alt="Try-on result"
@@ -354,17 +342,17 @@ export default function App() {
           <div className="mirror-overlay">
             <div className="overlay-badge">
               <div className="badge-pulse"></div>
-              <span>{isMirrorActive ? 'SYSTEM ACTIVE' : 'STANDBY'}</span>
+              <span>{isCameraActive ? 'SYSTEM ACTIVE' : 'STANDBY'}</span>
             </div>
 
-            {isMirrorActive && <div className="scan-line"></div>}
+            {isCameraActive && <div className="scan-line"></div>}
 
             <div className="mirror-controls">
               <button className="btn" onClick={toggleCamera}>
-                {isMirrorActive ? 'Power Down Mirror' : 'Initialize Mirror'}
+                {isCameraActive ? 'Power Down Mirror' : 'Initialize Mirror'}
               </button>
-              <button className="btn" onClick={handleTakePhoto}>
-                {isMirrorActive ? 'Take Photo' : 'Upload / Take Photo'}
+              <button className="btn" onClick={handleTakePhoto} disabled={!isCameraActive && !baseImagePath}>
+                Take Photo
               </button>
               <button
                 className={`btn btn-primary ${!selectedItem ? 'disabled' : ''}`}
@@ -373,26 +361,26 @@ export default function App() {
               >
                 Calibrate Fitment
               </button>
-              {processedImageUrl ? (
-                <button className="btn" onClick={() => setShowResultOverlay((prev) => !prev)}>
-                  {showResultOverlay ? 'Show Live Camera' : 'Show Try-On Result'}
-                </button>
-              ) : null}
             </div>
+            {voiceTranscript ? (
+              <p style={{ marginTop: '8px', color: '#93c5fd', fontSize: '0.85rem' }}>
+                Voice command: {voiceTranscript}
+              </p>
+            ) : null}
             {cameraError ? (
-              <p style={{ marginTop: '8px', color: '#fca5a5', fontSize: '0.9rem' }}>{cameraError}</p>
+              <p style={{ marginTop: '8px', color: '#fca5a5', fontSize: '0.9rem' }}>
+                {cameraError}
+              </p>
+            ) : null}
+            {productUrl ? (
+              <p style={{ marginTop: '8px', fontSize: '0.85rem' }}>
+                <a href={productUrl} target="_blank" rel="noreferrer" style={{ color: '#93c5fd' }}>
+                  View Product
+                </a>
+              </p>
             ) : null}
           </div>
         </div>
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          capture="user"
-          style={{ display: 'none' }}
-          onChange={handlePhotoFileChange}
-        />
       </main>
 
       <aside className="sidebar">
