@@ -4,6 +4,7 @@ import io
 import time
 import urllib.error
 import urllib.parse
+import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
@@ -164,34 +165,9 @@ class NanoBananaProcessor:
             return raw
 
         if self._is_url(source):
-            request = urllib.request.Request(
-                source,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 TryOnAI/1.0"
-                    )
-                },
-            )
-            try:
-                with urllib.request.urlopen(request, timeout=20) as response:
-                    content_type = (response.headers.get("Content-Type") or "").lower()
-                    data = response.read()
-
-                if content_type and "image/" not in content_type:
-                    raise ValueError(
-                        f"Remote URL did not return image content (content-type={content_type})."
-                    )
-                if not self._looks_like_image_bytes(data):
-                    raise ValueError("Remote URL payload is not a valid image.")
-                return data
-            except urllib.error.URLError as exc:
-                raise ValueError(f"Failed to download remote image: {exc}") from exc
-
-        data = Path(source).read_bytes()
-        if not self._looks_like_image_bytes(data):
-            raise ValueError("Local file is not a valid image.")
-        return data
+            with urllib.request.urlopen(source, timeout=20) as response:
+                return response.read()
+        return Path(source).read_bytes()
 
     @staticmethod
     def _format_source_fetch_error(
@@ -378,7 +354,8 @@ class NanoBananaProcessor:
             "Return one photorealistic edited image."
         )
 
-            client = genai.Client(api_key=self.api_key)
+        client = genai.Client(api_key=self.api_key)
+        try:
             response = await asyncio.to_thread(
                 client.models.generate_content,
                 model=self.model,
