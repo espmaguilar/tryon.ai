@@ -1,2 +1,4 @@
+vision-agents[gemini,getstream]
 getstream
+pillow
 python-dotenv
